@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.3.0
+// @version      1.3.1
 // @description  A citation picker in the article editor's own toolbar, beside H3. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -1719,14 +1719,17 @@
     svg.setAttribute('class', 'rcx-icon');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-width', '2.3');
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
-    for (const d of ['M9 4H6.5v16H9',        // [
-                     'M15 4h2.5v16H15',      // ]
-                     'M10.6 10.2 12.8 8.6V16',
-                     'M10.9 16h3.8']) {      // the 1
+    /* Sized against the letters it stands next to rather than against the
+       box it is drawn in: at stroke 2 in a 24 box it came out a shade thinner
+       and shorter than H3 beside it, which reads as "not quite a button". */
+    for (const d of ['M9.4 3.2H5.6v17.6h3.8',    // [
+                     'M14.6 3.2h3.8v17.6h-3.8',  // ]
+                     'M10.4 10 13 8.2V16.6',
+                     'M10.6 16.6h4.8']) {        // the 1
       const path = document.createElementNS(ICON, 'path');
       path.setAttribute('d', d);
       svg.appendChild(path);
@@ -1784,14 +1787,21 @@
       text-indent:0 !important;
       font-size:14px !important; line-height:1 !important; letter-spacing:normal !important;
       overflow:visible !important; visibility:visible !important; opacity:1 !important;
-      min-width:1.9em; min-height:1.4em; cursor:pointer;
+      cursor:pointer;
       display:inline-flex !important; align-items:center; justify-content:center;
+      /* As narrow as it can be and still be pressable. The toolbar is one row
+         that wraps when it runs out of width, and every control on it is a
+         chance to wrap — so ours asks for the least it can: no minimum width
+         beyond the icon, and less padding at the sides than the control it was
+         cloned from, which was sized for a two-character label. */
+      min-width:0 !important; min-height:0 !important;
+      padding-left:6px !important; padding-right:6px !important;
     }
     .rcx-btn::before, .rcx-btn::after,
     .rcx-btn *::before, .rcx-btn *::after { content:none !important; display:none !important; }
     .rcx-btn * { background-image:none !important; text-indent:0 !important; color:inherit !important; }
     .rcx-icon {
-      width:1.25em !important; height:1.25em !important;
+      width:1.35em !important; height:1.35em !important;
       display:block !important; visibility:visible !important; opacity:1 !important;
       color:inherit; flex:0 0 auto;
     }
