@@ -28,7 +28,7 @@ status=0
 for test in *.test.js; do
   echo
   echo "— $test"
-  TEST="./$test" node harness.js || status=1
+  node "./$test" || status=1
 done
 echo
 [ $status -eq 0 ] && echo "all good" || echo "something failed"

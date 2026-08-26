@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.1.0
+// @version      1.2.0
 // @description  A citation picker in the article editor's own toolbar, beside H3. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -169,7 +169,19 @@
     return `${n}${suffix}`;
   };
 
-  const inEditor = () => /\/edit\/?$/.test(location.pathname);
+  /* Is this the edit form?
+   *
+   * The path says so on every edit page there is — but the path is a
+   * convention and the form is a fact, so when it does not match, the
+   * reference boxes are asked instead. "Format citation" appears under every
+   * one of them and nowhere else on the site. */
+  function inEditor() {
+    if (/\/edit(?:\/|$)/.test(location.pathname)) return true;
+    for (const el of document.querySelectorAll('a, button')) {
+      if (tidy(el.textContent).toLowerCase() === FORMAT_LINK) return true;
+    }
+    return false;
+  }
 
   // ——————————————————————————————————————————————————————— the numbers
 
@@ -618,50 +630,77 @@
 
   /* Where the button goes.
    *
-   * Beside H3, in the editor's own toolbar — and the way it is found is by
-   * finding H3 itself. Not by a class name: the toolbar's markup belongs to
-   * whichever editor Radiopaedia is running this month, and a class read off
-   * it today is a button that vanishes the day they upgrade. The row of
-   * headings, on the other hand, is the feature: P, H1, H2, H3 are what the
-   * house style allows, and they will still be called that.
+   * Beside H3, in the editor's own toolbar — and the search runs from the TEXT
+   * outwards rather than from the toolbar inwards. Which way round it goes is
+   * the difference between a button that appears and a button that does not.
    *
-   * Which is also how the button gets its looks. It is H3, cloned — same tag,
-   * same classes, same padding, same hover — with everything else stripped
-   * off it. Stripping is the part that matters: an editor binds its commands
-   * through `data-` attributes and ids, and a clone that kept them would be a
-   * button that inserts a citation AND turns the paragraph into a heading. */
-  const HEADING_LABEL = 'h3';
+   * The first version looked for a control whose text was "H3" and worked back
+   * from there. That is one assumption too many: it takes the toolbar to be
+   * made of `<button>`s, and the heading control to carry its name as text
+   * rather than as an icon with a label on it. Get either wrong and there is
+   * no button anywhere on the page and nothing to say why.
+   *
+   * A contenteditable, on the other hand, is not a matter of opinion. So: find
+   * the text, walk up from it until an ancestor holds a row of controls
+   * standing BEFORE that text, and take the biggest such row — that is the
+   * toolbar, whatever it is built out of. Then, inside it, stand beside H3 if
+   * H3 is there to be found (by its text, or by the label a screen reader
+   * would read out), beside H2 or H1 if it is not, and at the end of the row
+   * if none of them can be recognised. The end of the row is where the
+   * headings are anyway.
+   *
+   * And if there is no row of controls at all, the button still appears —
+   * pinned to the corner of the window. Ugly, and always visible, which is
+   * what counts when the alternative is nothing. */
+  const CONTROL = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
+  const HEADINGS = ['h3', 'h2', 'h1'];
 
-  function toolbarSpots() {
-    const spots = [];
-    for (const el of document.querySelectorAll('button, a, [role="button"]')) {
-      if (el.closest('.rcx-panel')) continue;
-      if (tidy(el.textContent).toLowerCase() !== HEADING_LABEL) continue;
-      const bar = el.parentElement;
-      if (!bar || bar.querySelector(':scope > .rcx-btn')) continue;
-      const box = el.getBoundingClientRect();
-      if (!box.width || !box.height) continue;   // attached is not the same as visible
-      spots.push({ h3: el, bar });
-    }
-    return spots;
-  }
-
-  /* The text this toolbar drives. Up a few steps from the bar, and the first
-   * editable inside what we land on — preferring one that comes AFTER the bar
-   * in document order, because a toolbar sits above its text and an editor
-   * wrapper can hold more than one field. */
-  function editorFor(bar) {
-    let scope = bar;
-    for (let up = 0; up < 6 && scope; up++) {
+  function toolbarFor(host) {
+    let scope = host;
+    for (let up = 0; up < 6 && scope?.parentElement; up++) {
       scope = scope.parentElement;
-      if (!scope) break;
-      const found = editableWithin(scope);
-      if (!found.length) continue;
-      const below = found.filter((f) =>
-        bar.compareDocumentPosition(f.host) & Node.DOCUMENT_POSITION_FOLLOWING);
-      return below[0] || found[0];
+
+      /* Controls that stand before the text and are not inside it. "Before"
+       * is what keeps the form's own Save and Cancel — which come after —
+       * from being mistaken for a toolbar. */
+      const rows = new Map();
+      for (const el of scope.querySelectorAll(CONTROL)) {
+        if (el.closest('.rcx-panel') || host.contains(el) || el.contains(host)) continue;
+        if (!(host.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING)) continue;
+        const bar = el.parentElement;
+        if (!bar) continue;
+        if (!rows.has(bar)) rows.set(bar, []);
+        rows.get(bar).push(el);
+      }
+
+      /* The biggest row wins, and where two are the same size the LAST one
+       * does: a toolbar in groups ("B I x₁ x¹" | "P H1 H2 H3") is several
+       * rows, and the headings are in the last of them. */
+      let best = null;
+      for (const [bar, members] of rows) {
+        if (!best || members.length >= best.members.length) best = { bar, members };
+      }
+      if (best && best.members.length >= 3) return best;
     }
     return null;
+  }
+
+  /* Which control to stand beside, and what to call the way we found it —
+   * that name goes in the console line, so "why is the button not next to H3"
+   * is a question the page can answer by itself. */
+  function anchorIn(members) {
+    for (const want of HEADINGS) {
+      const hit = [...members].reverse().find((el) => named(el, want));
+      if (hit) return { el: hit, how: want.toUpperCase() };
+    }
+    return { el: members[members.length - 1], how: 'end of the toolbar' };
+  }
+
+  function named(el, want) {
+    if (tidy(el.textContent).toLowerCase() === want) return true;
+    const label = tidy(el.getAttribute('aria-label') || el.getAttribute('title') ||
+                       el.getAttribute('data-mce-name') || '').toLowerCase();
+    return label === want || label === `heading ${want.slice(1)}`;
   }
 
   // ————————————————————————————————————————————————————— the caret
@@ -1455,33 +1494,73 @@
   function mount() {
     if (!inEditor()) return;
 
-    // Toolbars come and go with the editor; entries whose button is no longer
-    // on the page are entries for an editor that is no longer there.
+    // Buttons that are no longer on the page belong to an editor that is no
+    // longer there.
     for (let i = editors.length - 1; i >= 0; i--) {
       if (!editors[i].button?.isConnected) editors.splice(i, 1);
     }
 
-    for (const spot of toolbarSpots()) {
-      const target = editorFor(spot.bar);
-      if (!target) continue;
-      const button = cloneButton(spot.h3);
-      const entry = { ...target, button, caret: null };
-      spot.h3.insertAdjacentElement('afterend', button);
-      editors.push(entry);
-      watchCaret(entry);
+    const fresh = editableWithin(document)
+      .filter((f) => !editors.some((e) => e.root === f.root));
 
-      // Capture, and stopped dead: whatever the editor has bound to its
-      // toolbar, this press is not for it.
-      button.addEventListener('mousedown', (e) => e.preventDefault(), true);
-      button.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (panel.el && panel.button === button) return closePanel();
-        closePanel();
-        button.classList.add('rcx-open');
-        openPanel(entry, button);
-      }, true);
+    for (const found of fresh) {
+      const bar = toolbarFor(found.host);
+      if (!bar) continue;
+      const { el: anchor, how } = anchorIn(bar.members);
+      if (anchor.parentElement?.querySelector(':scope > .rcx-btn')) continue;
+      const button = cloneButton(anchor);
+      anchor.insertAdjacentElement('afterend', button);
+
+      /* Attached is not the same as visible. A clone of a control that is
+       * itself hidden — a toolbar in a collapsed panel, a template the form
+       * has not used yet — is a button nobody can press, and the corner is
+       * better than that. */
+      const box = button.getBoundingClientRect();
+      if (!box.width || !box.height) {
+        button.remove();
+        continue;
+      }
+      hold(found, button, `beside ${how}`);
     }
+
+    /* Nothing anywhere to stand beside. One button, pinned to the corner, for
+     * the first editable on the page — never one per field, which on a form
+     * with six of them would be six buttons in the same corner. */
+    if (!editors.length && fresh.length) {
+      const button = plainButton();
+      document.body.appendChild(button);
+      hold(fresh[0], button, 'floating, top right');
+    }
+  }
+
+  function hold(found, button, how) {
+    const entry = { ...found, button, how, caret: null };
+    editors.push(entry);
+    watchCaret(entry);
+
+    // Capture, and stopped dead: whatever the editor has bound to its
+    // toolbar, this press is not for it.
+    button.addEventListener('mousedown', (e) => e.preventDefault(), true);
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (panel.el && panel.button === button) return closePanel();
+      closePanel();
+      button.classList.add('rcx-open');
+      openPanel(entry, button);
+    }, true);
+  }
+
+  /* When there is no toolbar to borrow from: Radiopaedia's own flat button,
+   * built rather than cloned, in the corner of the window. */
+  function plainButton() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'rcx-btn rcx-solo';
+    button.textContent = LABEL;
+    button.setAttribute('title', HINT);
+    button.setAttribute('aria-label', 'Cite a reference');
+    return button;
   }
 
   /* H3, cloned and stripped.
@@ -1552,6 +1631,19 @@
    * keeps H3's stylesheet; what these three lines add is the tint that says
    * the panel below it is open. */
   GM_addStyle(`
+    /* Only used when there was no toolbar to clone from. Radiopaedia's own
+       ".btn.btn-flat", by its numbers: 6px/12px of padding, 12px semibold on
+       an 18px line, a 2px corner, a hairline border darker along the bottom. */
+    .rcx-solo {
+      position:fixed; top:14px; right:14px; z-index:99997;
+      padding:6px 12px; border-radius:2px;
+      border:1px solid rgba(0,0,0,.1); border-bottom-color:rgba(0,0,0,.25);
+      background:#ededed; color:#5b2d90;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.2), 0 2px 10px rgba(0,0,0,.18);
+      font-family:"Open Sans", system-ui, -apple-system, sans-serif;
+      font-size:12px; font-weight:600; line-height:18px; cursor:pointer;
+    }
+
     .rcx-btn.rcx-open {
       background:#5b2d90 !important; color:#fff !important; border-color:transparent !important;
     }
@@ -1718,6 +1810,50 @@
    * toolbar, which is a different problem with a different fix. */
   console.info('[Radiopaedia Cite] active ·', location.pathname,
                '· editor page:', inEditor(),
-               '· editors:', editors.length,
+               '· editable fields:', editableWithin(document).length,
+               '· buttons:', editors.length
+                 ? editors.map((e) => e.how).join(', ')
+                 : 'NONE',
                '· references:', inEditor() ? referenceBoxes().length : 0);
+
+  /* And something to ask, when that line is not enough.
+   *
+   * `radiopaediaCite.look()` in the console reports what the script can see of
+   * the page — how many editable fields, what it took for a toolbar, what the
+   * controls in it are called — which is everything needed to work out why a
+   * button did not appear, from the machine where it did not appear. It reads
+   * and returns; it changes nothing. */
+  try {
+    const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+    page.radiopaediaCite = {
+      look() {
+        const fields = editableWithin(document);
+        const report = {
+          url: location.href,
+          editorPage: inEditor(),
+          editableFields: fields.length,
+          buttons: editors.map((e) => e.how),
+          references: referenceBoxes().length,
+          fields: fields.map((f) => {
+            const bar = toolbarFor(f.host);
+            return {
+              field: f.host.tagName + (f.host.className ? '.' + String(f.host.className).split(' ').join('.') : ''),
+              words: tidy(f.root.textContent).slice(0, 40),
+              toolbar: bar
+                ? bar.bar.tagName + (bar.bar.className ? '.' + String(bar.bar.className).split(' ').join('.') : '')
+                : 'NOT FOUND',
+              controls: bar
+                ? bar.members.map((el) => tidy(el.textContent) ||
+                    tidy(el.getAttribute('aria-label') || el.getAttribute('title') || '') ||
+                    `<${el.tagName.toLowerCase()}>`)
+                : [],
+              standsBeside: bar ? anchorIn(bar.members).how : null,
+            };
+          }),
+        };
+        console.log(JSON.stringify(report, null, 2));
+        return report;
+      },
+    };
+  } catch { /* a sandbox that will not take it: the console line still prints */ }
 })();

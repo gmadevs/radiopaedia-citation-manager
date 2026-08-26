@@ -7,16 +7,22 @@ const REF1 = '1. Rykken JB, Diehn FE, Hunt CH. Rim and flame signs: postgadolini
 const REF2 = '2. Smith J, Brown K. Ependymoma of the spinal cord: a review. (2019) Neuroradiology. 61 (2): 101-10. &lt;a href="https://doi.org/10.1007/s00234-019-02155-7"&gt;doi:10.1007/s00234-019-02155-7&lt;/a&gt;';
 const REF3 = '3. Wilson P. Haemangioblastoma imaging features. (2021) Clinical Radiology. 76 (5): 388-95. &lt;a href="https://www.ncbi.nlm.nih.gov/pubmed/33612345"&gt;Pubmed&lt;/a&gt;';
 
-const page = `<!doctype html><html><body>
-<h1>Edit article</h1>
-<div class="tox-tinymce">
+/* Two pages. The default is shaped like a TinyMCE editor — a toolbar of
+ * buttons above an iframe-less contenteditable — and `PAGE=plain` is the same
+ * form with no toolbar anywhere, which is how the corner button gets tested. */
+const TOOLBAR = `
   <div class="tox-editor-header"><div class="tox-toolbar"><div class="tox-toolbar__group" id="bar">
     <button class="tox-tbtn" data-mce-name="bold" aria-label="Bold"><span class="tox-tbtn__select-label">B</span></button>
     <button class="tox-tbtn" data-mce-name="p" aria-label="Paragraph"><span class="tox-tbtn__select-label">P</span></button>
     <button class="tox-tbtn" data-mce-name="h1" aria-label="Heading 1"><span class="tox-tbtn__select-label">H1</span></button>
     <button class="tox-tbtn" data-mce-name="h2" aria-label="Heading 2"><span class="tox-tbtn__select-label">H2</span></button>
     <button class="tox-tbtn" id="h3" data-mce-name="h3" aria-label="Heading 3"><span class="tox-tbtn__select-label">H3</span></button>
-  </div></div></div>
+  </div></div></div>`;
+
+const page = `<!doctype html><html><body>
+<h1>Edit article</h1>
+<div class="tox-tinymce">
+  ${process.env.PAGE === 'plain' ? '' : TOOLBAR}
   <div class="tox-sidebar-wrap"><div class="tox-edit-area"><div contenteditable="true" id="body"><p id="p1">The flame sign is seen on sagittal post contrast T1 weighted imaging.</p><p id="p2">Other enhancing lesions <sup id="m1">1</sup> are the differential.</p><p id="p3">A sentence with no stop</p></div></div></div>
 </div>
 <div id="refs">
@@ -96,6 +102,10 @@ function is(what, got, want) {
 }
 function ok(what, cond) { is(what, !!cond, true); }
 
+const HINT = /\/\/ @description[\s\S]*?\n/.test(SRC)
+  ? (SRC.match(/const HINT = ([\s\S]*?);\n/) || [])[1]
+  : null;
+
 module.exports = { window, doc, $, body, setCaret, click, key, type, wait, is, ok,
+                   HINT: HINT ? eval(HINT) : null,
                    done: () => process.exit(failed ? 1 : 0) };
-if (process.env.TEST) require(process.env.TEST);

@@ -200,28 +200,55 @@ once.
 
 ## How it finds the toolbar
 
-By finding `H3`. Not by a class name: the toolbar's markup belongs to whichever editor Radiopaedia
-is running this month, and a class read off it today is a button that vanishes the day they upgrade.
-The row of headings, on the other hand, is the feature — `P`, `H1`, `H2`, `H3` are what the house
-style allows, and they will still be called that.
+**From the text outwards**, which is the opposite of how you would first write it. A contenteditable
+is not a matter of opinion: it is found, and then the search walks *up* from it until it meets an
+ancestor holding a row of controls that stands **before** that text. The biggest such row is the
+toolbar, whatever it happens to be built out of — and where two rows are the same size the last one
+wins, because a toolbar in groups (`B I x₁ x¹` | `P H1 H2 H3`) keeps the headings in the last group.
 
-Which is also how the button gets its looks. It **is** `H3`, cloned — same tag, same classes, same
-padding, same hover — with every attribute except `class` and `style` stripped off it, on the button
-and on whatever it wraps. That stripping is the part that matters: an editor binds its commands
-through `data-` attributes and ids, and a clone that kept them would be a button that inserts a
-citation *and* turns your paragraph into a heading.
+Then, inside that row:
+
+| | |
+|---|---|
+| beside **H3** | recognised by its text, or by the label a screen reader would read out (`aria-label`, `title`, `data-mce-name`) |
+| beside **H2** or **H1** | when H3 cannot be recognised |
+| at the **end of the row** | when none of them can — which is where the headings are anyway |
+| **pinned to the corner** of the window | when there is no row of controls at all. Ugly, and always visible, which is what counts when the alternative is nothing |
+
+The first version of this looked for a control whose text was `H3` and worked back from there. That
+is one assumption too many — it takes the toolbar to be made of `<button>`s and the heading control
+to carry its name as text rather than as an icon — and when either is wrong there is no button
+anywhere on the page and nothing to say why.
+
+The looks are borrowed the same way. The button **is** the control it stands beside, cloned — same
+tag, same classes, same padding, same hover — with every attribute except `class` and `style`
+stripped off it, on the button and on whatever it wraps. That stripping is the part that matters: an
+editor binds its commands through `data-` attributes and ids, and a clone that kept them would be a
+button that inserts a citation *and* turns your paragraph into a heading.
 
 ## When something is not right
 
 **No button.** Open the console: the script prints one line on every edit page it runs on.
 
 ```
-[Radiopaedia Cite] active · /articles/…/edit · editor page: true · editors: 1 · references: 11
+[Radiopaedia Cite] active · /articles/…/edit · editor page: true · editable fields: 1
+                  · buttons: beside H3 · references: 11
 ```
 
 No line at all means the script is not running — check it is enabled and that the page is under
-`radiopaedia.org`. `editors: 0` means it is running and did not find the toolbar, which is a
-different problem: the heading buttons have been renamed or moved.
+`radiopaedia.org`. `editable fields: 0` means it is running and cannot see the editor at all.
+`buttons: NONE` means it found the text and could not place anything, which should not happen: there
+is a corner to fall back on.
+
+For anything else, ask the page directly:
+
+```js
+radiopaediaCite.look()
+```
+
+It prints what the script can see — the fields, what it took for a toolbar, what the controls in
+that toolbar are called, and which one it decided to stand beside. It reads and returns; it changes
+nothing. That output is what an issue about a missing button should carry.
 
 **"click in the text first".** The panel needs to know where the marker goes, and it takes that from
 the last place the caret was inside the article text. Click in the text, then press the button.
