@@ -179,6 +179,15 @@ one marker, in order. <kbd>⌫</kbd> on an empty box takes the last one back.
 
 ## What it writes, and what it does not
 
+The marker is written **with the editor's own commands** — `insertText`, then `superscript`, which
+is precisely what pressing `x¹` runs. So what lands in the article is the markup *this* editor makes
+for a superscript, and markup it will not turn round and undo: an editor that keeps a whitelist and
+runs it over its own document whenever something changes it will quietly unwrap a `<sup>` that was
+put there behind its back, leaving the number in the text at full size — the one failure that looks
+like it worked. Where there is no `execCommand` to call, the node goes in by hand instead. (The
+space in front is always written by hand: `insertText` with a space gives a non-breaking one in most
+engines, and an `&nbsp;` in the saved article is something somebody has to come and take out again.)
+
 Two places, both of them yours to undo:
 
 - the `<sup>` in the editor — selectable and deletable like any other text, and on TinyMCE it is on
@@ -202,9 +211,11 @@ once.
 
 **From the text outwards**, which is the opposite of how you would first write it. A contenteditable
 is not a matter of opinion: it is found, and then the search walks *up* from it until it meets an
-ancestor holding a row of controls that stands **before** that text. The biggest such row is the
-toolbar, whatever it happens to be built out of — and where two rows are the same size the last one
-wins, because a toolbar in groups (`B I x₁ x¹` | `P H1 H2 H3`) keeps the headings in the last group.
+ancestor holding rows of controls standing **before** that text. Among those rows, the one that wins
+is **the row with a heading control in it** — not the row with the most in it. Radiopaedia's toolbar
+comes in four groups and the first of them (`B` `I` `x₁` `x¹` `T̶`) is the biggest; going by size put
+the button beside the strike-out, which is both the wrong place and a place where it is easy not to
+notice that it is the wrong place.
 
 Then, inside that row:
 
@@ -225,6 +236,12 @@ tag, same classes, same padding, same hover — with every attribute except `cla
 stripped off it, on the button and on whatever it wraps. That stripping is the part that matters: an
 editor binds its commands through `data-` attributes and ids, and a clone that kept them would be a
 button that inserts a citation *and* turns your paragraph into a heading.
+
+The **inside**, though, is emptied and drawn again rather than relabelled. A toolbar of icons hides
+its text — a sprite in the background and a text-indent, an icon font and a glyph in `::before`, a
+`font-size: 0` — so a clone of one with a word written into it is a button that is there, and takes
+the press, and cannot be seen. What goes in instead is an inline SVG of a number in brackets, drawn
+in strokes that owe the stylesheet nothing.
 
 ## When something is not right
 
@@ -255,6 +272,10 @@ the last place the caret was inside the article text. Click in the text, then pr
 
 **"The citation tool could not be reached" / a Cloudflare notice.** Open
 [radiopaedia.work](https://radiopaedia.work) in a tab, clear the check, and try again.
+
+**The number went in but it is not raised.** The toast says so when it happens: the editor accepted
+the text and refused the superscript. Select the number and press `x¹` — and please open an issue
+with the output of `radiopaediaCite.look()`, because that is a case worth handling.
 
 **The reference box did not appear.** The citation is on the clipboard — add the box with
 Radiopaedia's own button and paste it in. The marker is not inserted in that case; cite it once the

@@ -51,6 +51,43 @@ Object.defineProperty(window.navigator, 'clipboard', {
   configurable: true,
 });
 window.GM_addStyle = () => {};
+
+/* jsdom has no execCommand, and the script's first choice is to write through
+ * the editor's own commands — so a small honest one is provided here, and
+ * `NOCMD=1` takes it away again to exercise the DOM fallback instead. Both
+ * paths are tested: insert.test.js runs the cases through this, and
+ * insert-dom.test.js runs the same cases with it gone. */
+if (!process.env.NOCMD) {
+  window.__commands = [];
+  doc.execCommand = function (command, ui, value) {
+    window.__commands.push(command);
+    const sel = doc.getSelection();
+    if (!sel.rangeCount) return false;
+    const range = sel.getRangeAt(0);
+    if (command === 'insertText') {
+      range.deleteContents();
+      const node = doc.createTextNode(String(value));
+      range.insertNode(node);
+      const after = doc.createRange();
+      after.setStart(node, node.data.length);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+      return true;
+    }
+    if (command === 'superscript') {
+      const sup = doc.createElement('sup');
+      sup.appendChild(range.extractContents());
+      range.insertNode(sup);
+      const over = doc.createRange();
+      over.selectNodeContents(sup);
+      sel.removeAllRanges();
+      sel.addRange(over);
+      return true;
+    }
+    return false;
+  };
+}
 window.unsafeWindow = window;
 window.__asked = [];
 window.GM_xmlhttpRequest = ({ url, onload }) => {

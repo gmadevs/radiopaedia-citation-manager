@@ -27,9 +27,15 @@ const buttonIn = (id) => doc.getElementById(`${id}-bar`).querySelector('.rcx-btn
   // a toolbar with no headings in it at all
   const flat = addEditor(
     '<button title="Bold">B</button><button title="Italic">I</button><button title="Link">L</button>');
-  // headings in a group of their own, after the group with the formatting in it
+  /* Radiopaedia's own toolbar, as it stands: four groups, and the FIRST is
+   * the biggest. Going by size put the button at the end of that one, beside
+   * the strike-out, which is what this case exists to keep from happening
+   * again. */
   const groups = addEditor(
-    '<span class="g"><button>B</button><button>I</button><button>x²</button></span>' +
+    '<span class="g"><button>B</button><button>I</button><button>x₁</button>' +
+      '<button>x¹</button><button>T̶</button></span>' +
+    '<span class="g"><button>1.</button><button>•</button><button>⇤</button><button>⇥</button></span>' +
+    '<span class="g"><button>🔗</button><button>⛓</button></span>' +
     '<span class="g" id="heads"><button>P</button><button>H1</button><button>H2</button><button>H3</button></span>');
 
   await wait(500);   // the observer settles at 250ms
@@ -44,13 +50,12 @@ const buttonIn = (id) => doc.getElementById(`${id}-bar`).querySelector('.rcx-btn
   is('at the end of the row', buttonIn(flat)?.previousElementSibling?.textContent, 'L');
 
   const heads = doc.getElementById('heads');
-  is('a toolbar in groups puts it in the group with the headings',
+  is('a toolbar in groups puts it in the group with the headings, not the biggest one',
      !!heads.querySelector('.rcx-btn'), true);
   is('beside H3, which is the last of them',
      heads.querySelector('.rcx-btn')?.previousElementSibling?.textContent, 'H3');
-  is('and not in the group before it',
-     doc.getElementById(`${groups}-bar`).querySelector('.g .rcx-btn') ===
-       heads.querySelector('.rcx-btn'), true);
+  is('and nowhere else in that toolbar',
+     doc.getElementById(`${groups}-bar`).querySelectorAll('.rcx-btn').length, 1);
 
   is('one button per field, and no more',
      doc.querySelectorAll('.rcx-btn').length, 4);

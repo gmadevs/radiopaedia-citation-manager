@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.2.0
+// @version      1.3.0
 // @description  A citation picker in the article editor's own toolbar, beside H3. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -673,9 +673,21 @@
         rows.get(bar).push(el);
       }
 
-      /* The biggest row wins, and where two are the same size the LAST one
-       * does: a toolbar in groups ("B I x₁ x¹" | "P H1 H2 H3") is several
-       * rows, and the headings are in the last of them. */
+      /* The row with a HEADING in it wins — not the row with the most in it.
+       *
+       * A toolbar in groups ("B I x₁ x¹ T̶" | "1. •" | "🔗 ⛓" | "P H1 H2 H3")
+       * is four rows, and the first of them is the biggest. Going by size put
+       * the button at the end of the formatting group, beside the strike-out,
+       * which is both the wrong place and a place where it is easy not to
+       * notice it is the wrong place. What we are looking for is not the
+       * longest row; it is the row the headings are in. */
+      for (const want of HEADINGS) {
+        for (const [bar, members] of rows) {
+          if (members.length >= 2 && members.some((el) => named(el, want))) return { bar, members };
+        }
+      }
+
+      // No heading anywhere in this scope: the biggest row, as a last resort.
       let best = null;
       for (const [bar, members] of rows) {
         if (!best || members.length >= best.members.length) best = { bar, members };
@@ -790,7 +802,6 @@
   function insertCitation(target, numbers) {
     const range = liveCaret(target);
     if (!range) return { ok: false, why: 'caret' };
-    const doc = target.doc;
 
     const near = adjacentMarker(target, range);
     if (near) {
@@ -806,14 +817,106 @@
     }
 
     const at = (HOP_PUNCTUATION && hopPunctuation(range)) || range;
-    const sup = doc.createElement('sup');
-    sup.textContent = markerText(numbers);
+    const text = markerText(numbers);
+    const put = raiseHere(target, at, text, wantsSpace(at));
+    if (!put?.node) return { ok: false, why: 'insert' };
+    settle(target, put.node);
+    return { ok: true, marker: text, merged: false, raised: put.raised };
+  }
 
-    const spaced = wantsSpace(at);
+  /* Writing a NEW marker, in the editor's own words where it has any.
+   *
+   * `execCommand` is what the toolbar's own x¹ button runs, so what comes out
+   * is exactly the markup THIS editor makes for a superscript — and, more to
+   * the point, markup it will not turn round and undo. An editor that keeps a
+   * whitelist and runs it over its document whenever something changes it will
+   * quietly unwrap a `<sup>` that was put there behind its back, leaving the
+   * number in the text at full size: the one failure that looks like it
+   * worked, because the number is right there and only the size is wrong.
+   *
+   * The DOM is the fallback, for a plain contenteditable with no editor around
+   * it — and for the tests, where there is no `execCommand` to call. */
+  function raiseHere(target, at, text, spaced) {
+    return byCommand(target, at, text, spaced) || byNode(target, at, text, spaced);
+  }
+
+  function byCommand(target, at, text, spaced) {
+    const doc = target.doc;
+    const sel = doc.getSelection?.();
+    if (!sel || typeof doc.execCommand !== 'function') return null;
+
+    let wrote = false;
+    try {
+      /* The space goes in by hand even here. `insertText` with a space at the
+       * end of a run gives a non-breaking one in most engines, and an `&nbsp;`
+       * in the saved article is a thing somebody has to come and take out
+       * again. A bare space is beneath the notice of any sanitiser. */
+      let from = at;
+      if (spaced) {
+        const gap = doc.createTextNode(' ');
+        at.insertNode(gap);
+        from = doc.createRange();
+        from.setStartAfter(gap);
+        from.collapse(true);
+      }
+
+      // execCommand works on whatever is focused, so the editor takes the
+      // focus back off the panel's search box before a word is written.
+      target.root.focus?.();
+      sel.removeAllRanges();
+      sel.addRange(from);
+      if (!doc.execCommand('insertText', false, text)) return wrote ? null : null;
+      wrote = true;
+
+      /* Select what was just typed — the caret is sitting at the end of it —
+       * and raise it the way the toolbar would. */
+      const caret = sel.rangeCount ? sel.getRangeAt(0) : null;
+      const node = caret?.startContainer;
+      if (!node || node.nodeType !== Node.TEXT_NODE || caret.startOffset < text.length) {
+        return { node: node || null, raised: false };
+      }
+      const over = doc.createRange();
+      over.setStart(node, caret.startOffset - text.length);
+      over.setEnd(node, caret.startOffset);
+      sel.removeAllRanges();
+      sel.addRange(over);
+      doc.execCommand('superscript');
+
+      const up = raisedNear(target, sel);
+      return { node: up || node, raised: !!up };
+    } catch {
+      // Half-written is still written: falling through to the DOM here would
+      // put the number in twice.
+      return wrote ? { node: null, raised: false } : null;
+    }
+  }
+
+  /* Is what the selection is sitting in raised? `<sup>` is the answer we want
+   * and the one Radiopaedia's own markup uses, but an editor that does
+   * superscript with a style rather than a tag has still done what was asked,
+   * and there is nothing to be gained by calling that a failure. */
+  function raisedNear(target, sel) {
+    if (!sel.rangeCount) return null;
+    const start = sel.getRangeAt(0).startContainer;
+    let el = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
+    const view = target.doc.defaultView;
+    while (el && el !== target.root) {
+      if (el.tagName === 'SUP') return el;
+      try {
+        if (view?.getComputedStyle(el).verticalAlign === 'super') return el;
+      } catch { /* detached mid-flight */ }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  function byNode(target, at, text, spaced) {
+    const doc = target.doc;
+    const sup = doc.createElement('sup');
+    sup.textContent = text;
     at.insertNode(sup);
     if (spaced) sup.parentNode.insertBefore(doc.createTextNode(' '), sup);
-    settle(target, sup);
-    return { ok: true, marker: sup.textContent, merged: false };
+    return { node: sup, raised: true };
   }
 
   /* A `<sup>` the caret is in, or immediately beside, with nothing but space
@@ -1383,6 +1486,10 @@
       return;
     }
     closePanel();
+    if (out.raised === false) {
+      return say(`Wrote ${out.marker}, but this editor would not raise it. ` +
+                 'Select the number and press x¹.', 'trouble');
+    }
     say(out.already ? `Already cited there — ${out.marker}`
         : out.merged ? `Merged into ${out.marker}`
         : `Cited ${out.marker}`);
@@ -1487,7 +1594,6 @@
 
   // ——————————————————————————————————————————————————— the button
 
-  const LABEL = '[1]';
   const HINT = 'Cite a reference here (alt-shift-C) — pick one of the article’s references, ' +
                'or paste a DOI, PMID, PMCID, PII, ISBN, Google Books id or URL to add a new one';
 
@@ -1557,27 +1663,34 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'rcx-btn rcx-solo';
-    button.textContent = LABEL;
+    button.appendChild(icon());
     button.setAttribute('title', HINT);
     button.setAttribute('aria-label', 'Cite a reference');
     return button;
   }
 
-  /* H3, cloned and stripped.
+  /* The control it stands beside, cloned and stripped.
    *
    * Same tag, same classes, same everything the stylesheet knows about it —
    * and no attribute the editor could recognise. `data-mce-name`, `id`,
    * `href`, `aria-*`: all of it goes, on the button and on whatever it is
    * wrapped around, because that is how a toolbar knows which command a press
-   * belongs to. What is left looks exactly like a toolbar button and does
-   * nothing at all until we bind it. */
-  function cloneButton(h3) {
-    const button = h3.cloneNode(true);
+   * belongs to.
+   *
+   * The INSIDE, though, is emptied and drawn again rather than relabelled.
+   * A toolbar of icons hides its text — a background sprite and a text-indent,
+   * an icon font and a glyph in `::before`, a `font-size:0` — and a clone of
+   * one of those with "[1]" written into it is a button that is there, and
+   * takes the press, and cannot be seen. So the borrowed markup keeps the
+   * padding and the hover and loses everything that decides what is drawn; the
+   * icon is ours, an SVG that owes the stylesheet nothing. */
+  function cloneButton(anchor) {
+    const button = anchor.cloneNode(true);
     strip(button);
     for (const el of button.querySelectorAll('*')) strip(el);
 
-    const label = innermost(button);
-    label.textContent = LABEL;
+    button.textContent = '';
+    button.appendChild(icon());
     button.classList.add('rcx-btn');
     if (button.tagName === 'BUTTON') button.type = 'button';
     button.setAttribute('role', 'button');
@@ -1593,16 +1706,32 @@
     }
   }
 
-  /* The element the text actually sits in. A toolbar button is often a span
-   * inside a button inside a div, and writing the label onto the outside of
-   * that would throw the icon markup away along with the padding it carries. */
-  function innermost(el) {
-    let node = el;
-    for (;;) {
-      const kids = [...node.children].filter((c) => tidy(c.textContent));
-      if (kids.length !== 1) return node;
-      node = kids[0];
+  /* The icon: a number in square brackets, drawn rather than written.
+   *
+   * Strokes and not text, because a font-size or a colour inherited from the
+   * toolbar can make text vanish and cannot make a path vanish. `currentColor`
+   * so it still takes the button's colour when the panel below it is open. */
+  const ICON = 'http://www.w3.org/2000/svg';
+
+  function icon() {
+    const svg = document.createElementNS(ICON, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', 'rcx-icon');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    for (const d of ['M9 4H6.5v16H9',        // [
+                     'M15 4h2.5v16H15',      // ]
+                     'M10.6 10.2 12.8 8.6V16',
+                     'M10.9 16h3.8']) {      // the 1
+      const path = document.createElementNS(ICON, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
     }
+    return svg;
   }
 
   /* The same thing from the keyboard, and from inside the editor's own iframe
@@ -1643,6 +1772,30 @@
       font-family:"Open Sans", system-ui, -apple-system, sans-serif;
       font-size:12px; font-weight:600; line-height:18px; cursor:pointer;
     }
+
+    /* The clone keeps the toolbar's classes, and those classes were written
+       to draw an icon: a sprite in the background, a glyph in ::before, a
+       text-indent that pushes the label off the edge of the world. All of it
+       has to go, or the button is there and takes the press and cannot be
+       seen. The icon inside owes them nothing. */
+    .rcx-btn {
+      color:#5b2d90 !important;
+      background-image:none !important;
+      text-indent:0 !important;
+      font-size:14px !important; line-height:1 !important; letter-spacing:normal !important;
+      overflow:visible !important; visibility:visible !important; opacity:1 !important;
+      min-width:1.9em; min-height:1.4em; cursor:pointer;
+      display:inline-flex !important; align-items:center; justify-content:center;
+    }
+    .rcx-btn::before, .rcx-btn::after,
+    .rcx-btn *::before, .rcx-btn *::after { content:none !important; display:none !important; }
+    .rcx-btn * { background-image:none !important; text-indent:0 !important; color:inherit !important; }
+    .rcx-icon {
+      width:1.25em !important; height:1.25em !important;
+      display:block !important; visibility:visible !important; opacity:1 !important;
+      color:inherit; flex:0 0 auto;
+    }
+    .rcx-btn:hover { color:#3f1f66 !important; }
 
     .rcx-btn.rcx-open {
       background:#5b2d90 !important; color:#fff !important; border-color:transparent !important;

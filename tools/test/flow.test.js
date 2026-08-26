@@ -1,6 +1,8 @@
 const h = require('./harness.js');
 const { window, doc, $, body, setCaret, click, key, type, wait, is, ok } = h;
 
+const tidy = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+
 const answerFor = (citation, extra = {}) => {
   const data = { search: 'x', citation, error: null,
     result: [{ meta: [Object.assign({ title: 'Rim and flame signs', journal: 'AJNR', year: 2013, pmid: '23079405', doi: '10.3174/ajnr.a3292' }, extra), { s: 'arr' }] }, { s: 'arr' }] };
@@ -15,7 +17,9 @@ const answerFor = (citation, extra = {}) => {
   is('button stands right after H3', btn?.previousElementSibling?.id, 'h3');
   is('button wears H3s classes', btn?.classList.contains('tox-tbtn'), true);
   is('every command attribute is stripped', btn?.getAttribute('data-mce-name'), null);
-  is('the label is written innermost', btn?.querySelector('.tox-tbtn__select-label')?.textContent, '[1]');
+  is('it carries a drawn icon, not a word that a class could hide',
+     btn?.querySelector('svg.rcx-icon')?.querySelectorAll('path').length, 4);
+  is('and nothing of the icon it was cloned from', tidy(btn?.textContent), '');
 
   // ——— the panel, and "cite the last one" on open+return
   const p1 = doc.getElementById('p1').firstChild;   // "…imaging."
