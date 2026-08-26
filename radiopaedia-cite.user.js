@@ -6,8 +6,8 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.3.1
-// @description  A citation picker in the article editor's own toolbar, beside H3. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
+// @version      1.4.0
+// @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
 // @grant        GM_xmlhttpRequest
@@ -1054,6 +1054,18 @@
       target.caret = after.cloneRange();
     } catch { /* the marker is in; the caret is a courtesy */ }
 
+    stirred(target);
+  }
+
+  /* Told twice, because the two ways of listening are not the same. `input`
+   * covers anything watching the field the ordinary way. TinyMCE keeps its own
+   * undo stack and its own "is this dirty" flag, and a change made behind its
+   * back is in neither: without `undoManager.add()` what we wrote cannot be
+   * undone with ctrl-Z, and without `setDirty(true)` leaving the page may not
+   * warn that there is something unsaved. Every line is optional and guarded —
+   * this works on a plain contenteditable with no editor at all. */
+  function stirred(target) {
+    const doc = target.doc;
     try {
       const view = doc.defaultView || window;
       target.root.dispatchEvent(new view.Event('input', { bubbles: true }));
@@ -1069,6 +1081,34 @@
         ed.nodeChanged?.();
       }
     } catch { /* no TinyMCE, or a version that keeps its editors elsewhere */ }
+  }
+
+  /* Typing something at the caret, and nothing more: no marker, no space, no
+   * hop. The characters picker is the only thing that wants this, and it wants
+   * it to go in exactly where the caret is. */
+  function typeText(target, text) {
+    const range = liveCaret(target);
+    if (!range || !text) return false;
+    const doc = target.doc;
+
+    try {
+      const sel = doc.getSelection?.();
+      if (sel && typeof doc.execCommand === 'function') {
+        target.root.focus?.();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        if (doc.execCommand('insertText', false, text)) {
+          if (sel.rangeCount) target.caret = sel.getRangeAt(0).cloneRange();
+          stirred(target);
+          return true;
+        }
+      }
+    } catch { /* fall through to the DOM */ }
+
+    const node = doc.createTextNode(text);
+    range.insertNode(node);
+    settle(target, node);
+    return true;
   }
 
   // ————————————————————————————————————————————————————— the panel
@@ -1088,6 +1128,7 @@
 
   function openPanel(target, button) {
     closePanel();
+    closeChars();
     panel.target = target;
     panel.button = button;
     panel.batch = [];
@@ -1161,8 +1202,11 @@
    * opened near the bottom of the screen has to open upwards instead. */
   function place() {
     if (!panel.el || !panel.button?.isConnected) return closePanel();
-    const box = panel.button.getBoundingClientRect();
-    const el = panel.el;
+    placeUnder(panel.el, panel.button);
+  }
+
+  function placeUnder(el, button) {
+    const box = button.getBoundingClientRect();
     const w = el.offsetWidth, h = el.offsetHeight;
     const room = innerHeight - box.bottom - 12;
     const up = room < h && box.top > room;
@@ -1426,6 +1470,317 @@
     if (cursor < text.length) into.appendChild(document.createTextNode(text.slice(cursor)));
   }
 
+  // ————————————————————————————————————————— the characters picker
+
+  /* The other half of writing radiology in a browser: the characters that are
+   * not on the keyboard.
+   *
+   * A report says "≤5 mm", "±2 SD", "40 cm³", "β-hCG", "T1 → T2". Every one of
+   * those costs a detour — a search, a system palette, a remembered key
+   * combination that is different on an Italian keyboard from an English one
+   * (the tilde alone is alt-5 on one and a keystroke on the other). So: the
+   * same panel, the same search, the same return key, and a grid instead of a
+   * list.
+   *
+   * The names are what gets searched, and they are given in both English and
+   * Italian: this is a tool for people who write English articles on an
+   * Italian keyboard, and "maggiore" is what you reach for when you cannot
+   * remember that ">" is called "greater than". A character is also its own
+   * search term, so pasting one finds it.
+   */
+  const CHARS = [
+    ['Maths and comparison', [
+      ['<', 'less than', 'lt minore'],
+      ['>', 'greater than', 'gt maggiore'],
+      ['≤', 'less than or equal to', 'lte minore uguale'],
+      ['≥', 'greater than or equal to', 'gte maggiore uguale'],
+      ['±', 'plus minus', 'piu meno tolerance'],
+      ['×', 'multiplied by', 'times per dimensions'],
+      ['÷', 'divided by', 'diviso'],
+      ['≈', 'approximately equal to', 'circa about roughly'],
+      ['~', 'tilde', 'about circa approx'],
+      ['≠', 'not equal to', 'diverso different'],
+      ['°', 'degree', 'gradi angle temperature'],
+      ['∞', 'infinity', 'infinito'],
+      ['√', 'square root', 'radice'],
+      ['‰', 'per mille', 'per thousand'],
+      ['Δ', 'delta, change in', 'variazione difference'],
+      ['∅', 'empty set', 'vuoto none'],
+    ]],
+    ['Units and fractions', [
+      ['µ', 'micro', 'micron mu um'],
+      ['²', 'squared', 'due quadrato superscript two cm2'],
+      ['³', 'cubed', 'tre cubo superscript three cm3'],
+      ['¹', 'superscript one', 'uno apice'],
+      ['Ω', 'ohm', 'omega resistance'],
+      ['′', 'prime, minutes', 'primo feet'],
+      ['″', 'double prime, seconds', 'secondi inches'],
+      ['½', 'one half', 'mezzo'],
+      ['⅓', 'one third', 'terzo'],
+      ['⅔', 'two thirds', 'due terzi'],
+      ['¼', 'one quarter', 'quarto'],
+      ['¾', 'three quarters', 'tre quarti'],
+    ]],
+    ['Arrows', [
+      ['→', 'rightwards arrow', 'freccia destra becomes leads to'],
+      ['←', 'leftwards arrow', 'freccia sinistra'],
+      ['↑', 'upwards arrow', 'freccia su increased raised'],
+      ['↓', 'downwards arrow', 'freccia giu decreased reduced'],
+      ['↔', 'left right arrow', 'freccia doppia bidirectional'],
+      ['⇒', 'implies', 'freccia doppia therefore'],
+    ]],
+    ['Typography', [
+      ['–', 'en dash, ranges', 'trattino range 5-10'],
+      ['—', 'em dash', 'trattino lungo'],
+      ['…', 'ellipsis', 'puntini omission'],
+      ['•', 'bullet', 'punto elenco'],
+      ['§', 'section', 'paragrafo'],
+      ['†', 'dagger', 'croce footnote'],
+      ['‡', 'double dagger', 'doppia croce footnote'],
+      ['®', 'registered', 'marchio trademark'],
+      ['™', 'trademark', 'marchio'],
+      ['©', 'copyright', 'diritti'],
+      ['“', 'left double quote', 'virgolette aperte'],
+      ['”', 'right double quote', 'virgolette chiuse'],
+      ['‘', 'left single quote', 'apice aperto'],
+      ['’', 'apostrophe', 'apostrofo right single quote'],
+    ]],
+    ['Greek', [
+      ['α', 'alpha', 'alfa fetoprotein'],
+      ['β', 'beta', 'hcg'],
+      ['γ', 'gamma', 'camera knife'],
+      ['δ', 'delta small', 'piccolo'],
+      ['ε', 'epsilon', ''],
+      ['θ', 'theta', ''],
+      ['κ', 'kappa', 'light chain'],
+      ['λ', 'lambda', 'wavelength lunghezza onda'],
+      ['μ', 'mu', 'micro'],
+      ['π', 'pi', ''],
+      ['ρ', 'rho', 'density densita'],
+      ['σ', 'sigma', 'deviation deviazione'],
+      ['τ', 'tau', ''],
+      ['φ', 'phi', ''],
+      ['χ', 'chi', 'squared'],
+      ['ψ', 'psi', ''],
+      ['ω', 'omega', ''],
+      ['Σ', 'sigma capital, sum', 'somma total'],
+      ['Φ', 'phi capital', ''],
+      ['Λ', 'lambda capital', ''],
+    ]],
+    ['Signs', [
+      ['♀', 'female', 'femmina donna'],
+      ['♂', 'male', 'maschio uomo'],
+      ['✓', 'check', 'spunta yes present'],
+      ['✗', 'cross', 'croce no absent'],
+      ['Ø', 'diameter', 'diametro'],
+      ['↗', 'increasing', 'in aumento rising'],
+    ]],
+  ];
+
+  const CHAR_COLS = 9;               // the grid, and what the arrow keys step by
+  const RECENT_KEY = 'rcx-recent';   // the ones you actually use, kept
+  const RECENT_MAX = 9;
+
+  const chars = { el: null, target: null, button: null, view: [], at: 0, query: '' };
+
+  function recent() {
+    try {
+      const kept = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+      return Array.isArray(kept) ? kept.filter((c) => typeof c === 'string').slice(0, RECENT_MAX) : [];
+    } catch { return []; }
+  }
+
+  function remember(ch) {
+    try {
+      const kept = [ch, ...recent().filter((c) => c !== ch)].slice(0, RECENT_MAX);
+      localStorage.setItem(RECENT_KEY, JSON.stringify(kept));
+    } catch { /* this session only, then */ }
+  }
+
+  const charFor = (ch) => {
+    for (const [, list] of CHARS) {
+      const hit = list.find((row) => row[0] === ch);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  function openChars(target, button) {
+    closePanel();
+    closeChars();
+    chars.target = target;
+    chars.button = button;
+    chars.query = '';
+    chars.at = 0;
+
+    const el = document.createElement('div');
+    el.className = 'rcx-panel rcx-chars';
+    el.innerHTML =
+      '<div class="rcx-head">' +
+        '<span class="rcx-lede">Characters</span>' +
+        '<span class="rcx-where"></span>' +
+        '<button type="button" class="rcx-x" title="Close (esc)">×</button>' +
+      '</div>' +
+      '<input type="text" class="rcx-q" spellcheck="false" autocomplete="off" ' +
+        'placeholder="greater, tilde, micro, beta, freccia…">' +
+      '<div class="rcx-grid"></div>' +
+      '<div class="rcx-foot"></div>';
+
+    document.body.appendChild(el);
+    chars.el = el;
+
+    el.querySelector('.rcx-x').addEventListener('click', closeChars);
+    const q = el.querySelector('.rcx-q');
+    q.addEventListener('input', () => { chars.query = q.value; chars.at = 0; renderChars(); });
+    q.addEventListener('keydown', onCharKey);
+    el.addEventListener('mousedown', (e) => { if (e.target !== q) e.preventDefault(); });
+
+    renderChars();
+    placeUnder(el, button);
+    q.focus();
+
+    addEventListener('scroll', placeChars, true);
+    addEventListener('resize', placeChars);
+    document.addEventListener('mousedown', outsideChars, true);
+    document.addEventListener('keydown', escapeChars, true);
+  }
+
+  function closeChars() {
+    if (!chars.el) return;
+    removeEventListener('scroll', placeChars, true);
+    removeEventListener('resize', placeChars);
+    document.removeEventListener('mousedown', outsideChars, true);
+    document.removeEventListener('keydown', escapeChars, true);
+    chars.el.remove();
+    chars.el = null;
+    chars.button?.classList.remove('rcx-open');
+    chars.button = null;
+  }
+
+  const placeChars = () => {
+    if (!chars.el || !chars.button?.isConnected) return closeChars();
+    placeUnder(chars.el, chars.button);
+  };
+
+  const outsideChars = (e) => {
+    if (!chars.el) return;
+    if (chars.el.contains(e.target) || chars.button?.contains(e.target)) return;
+    closeChars();
+  };
+
+  const escapeChars = (e) => {
+    if (e.key === 'Escape' && chars.el) { e.stopPropagation(); closeChars(); }
+  };
+
+  /* The grid, and what is in it: the ones you have used lately first, then the
+   * groups. A search takes the groups apart and shows what matched, in the
+   * order the groups are written — which puts "≤" above "λ" when you type "l",
+   * because a report needs the first far more often than the second. */
+  function renderChars() {
+    const el = chars.el;
+    if (!el) return;
+    const grid = el.querySelector('.rcx-grid');
+    const where = el.querySelector('.rcx-where');
+    grid.textContent = '';
+
+    const caret = caretContext(chars.target);
+    where.textContent = caret ? `after ${caret}` : 'click in the text first';
+    where.classList.toggle('rcx-nowhere', !caret);
+
+    const terms = tidy(chars.query).toLowerCase().split(' ').filter(Boolean);
+    const view = [];
+    const groups = [];
+
+    if (!terms.length) {
+      const kept = recent().map(charFor).filter(Boolean);
+      if (kept.length) groups.push(['Lately', kept]);
+    }
+    for (const [name, list] of CHARS) {
+      const hits = terms.length
+        ? list.filter((row) => terms.every((t) =>
+            row[0] === t || row[1].includes(t) || row[2].includes(t)))
+        : list;
+      if (hits.length) groups.push([name, hits]);
+    }
+
+    for (const [name, list] of groups) {
+      const head = document.createElement('div');
+      head.className = 'rcx-group';
+      head.textContent = name;
+      grid.appendChild(head);
+      const row = document.createElement('div');
+      row.className = 'rcx-tiles';
+      for (const item of list) {
+        const i = view.length;
+        view.push(item);
+        const tile = document.createElement('button');
+        tile.type = 'button';
+        tile.className = 'rcx-tile';
+        tile.textContent = item[0];
+        tile.title = `${item[1]}  ·  ${item[0]}`;
+        tile.addEventListener('click', () => { chars.at = i; putChar(); });
+        tile.addEventListener('mousemove', () => {
+          if (chars.at === i) return;
+          chars.at = i;
+          paintChars();
+        });
+        row.appendChild(tile);
+      }
+      grid.appendChild(row);
+    }
+
+    if (!view.length) {
+      const none = document.createElement('div');
+      none.className = 'rcx-note';
+      none.textContent = 'Nothing by that name.';
+      grid.appendChild(none);
+    }
+
+    chars.view = view;
+    chars.at = Math.min(chars.at, Math.max(0, view.length - 1));
+    paintChars();
+  }
+
+  /* Which tile is chosen, repainted on its own rather than through
+   * `renderChars` — an arrow key that rebuilt the whole grid would lose the
+   * scroll position on every press. */
+  function paintChars() {
+    const el = chars.el;
+    if (!el) return;
+    const tiles = [...el.querySelectorAll('.rcx-tile')];
+    tiles.forEach((tile, i) => tile.classList.toggle('rcx-on', i === chars.at));
+    tiles[chars.at]?.scrollIntoView({ block: 'nearest' });
+    const item = chars.view[chars.at];
+    el.querySelector('.rcx-foot').textContent = item
+      ? `${item[0]}   ${item[1]}       ⏎  insert    esc  close`
+      : '↑↓←→  choose    ⏎  insert    esc  close';
+  }
+
+  function onCharKey(e) {
+    const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: CHAR_COLS, ArrowUp: -CHAR_COLS }[e.key];
+    if (step) {
+      e.preventDefault();
+      if (!chars.view.length) return;
+      chars.at = Math.max(0, Math.min(chars.view.length - 1, chars.at + step));
+      return paintChars();
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      putChar();
+    }
+  }
+
+  function putChar() {
+    const item = chars.view[chars.at];
+    if (!item) return;
+    if (!typeText(chars.target, item[0])) {
+      return say('Click in the article text where the character goes, then press again.', 'trouble');
+    }
+    remember(item[0]);
+    closeChars();
+    say(`${item[0]}  ${item[1]}`);
+  }
+
   // ————————————————————————————————————————————————————— the keys
 
   function onKey(e) {
@@ -1596,6 +1951,8 @@
 
   const HINT = 'Cite a reference here (alt-shift-C) — pick one of the article’s references, ' +
                'or paste a DOI, PMID, PMCID, PII, ISBN, Google Books id or URL to add a new one';
+  const CHARS_HINT = 'Insert a character that is not on the keyboard (alt-shift-X) — ' +
+                     '≤ ≥ ± × ≈ ~ ° µ ² ³ → β Δ and the rest, by name';
 
   function mount() {
     if (!inEditor()) return;
@@ -1614,7 +1971,7 @@
       if (!bar) continue;
       const { el: anchor, how } = anchorIn(bar.members);
       if (anchor.parentElement?.querySelector(':scope > .rcx-btn')) continue;
-      const button = cloneButton(anchor);
+      const button = cloneButton(anchor, 'cite');
       anchor.insertAdjacentElement('afterend', button);
 
       /* Attached is not the same as visible. A clone of a control that is
@@ -1626,7 +1983,26 @@
         button.remove();
         continue;
       }
-      hold(found, button, `beside ${how}`);
+      const entry = hold(found, button, `beside ${how}`);
+
+      /* And the characters, beside the citations: two buttons, one toolbar
+       * row, and the second one is the cheaper of the two to lose — so if it
+       * cannot be drawn it simply is not there, and the citation button, which
+       * is the point of all this, is unaffected. */
+      const glyphs = cloneButton(anchor, 'chars');
+      button.insertAdjacentElement('afterend', glyphs);
+      if (glyphs.getBoundingClientRect().width) {
+        entry.chars = glyphs;
+        press(glyphs, () => {
+          if (chars.el && chars.button === glyphs) return closeChars();
+          closePanel();
+          closeChars();
+          glyphs.classList.add('rcx-open');
+          openChars(entry, glyphs);
+        });
+      } else {
+        glyphs.remove();
+      }
     }
 
     /* Nothing anywhere to stand beside. One button, pinned to the corner, for
@@ -1643,17 +2019,25 @@
     const entry = { ...found, button, how, caret: null };
     editors.push(entry);
     watchCaret(entry);
+    press(button, () => {
+      if (panel.el && panel.button === button) return closePanel();
+      closePanel();
+      closeChars();
+      button.classList.add('rcx-open');
+      openPanel(entry, button);
+    });
+    return entry;
+  }
 
-    // Capture, and stopped dead: whatever the editor has bound to its
-    // toolbar, this press is not for it.
+  /* Capture, and stopped dead: whatever the editor has bound to its toolbar,
+   * this press is not for it. And `mousedown` is swallowed as well, so the
+   * caret in the article stays where it was while the panel opens. */
+  function press(button, what) {
     button.addEventListener('mousedown', (e) => e.preventDefault(), true);
     button.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (panel.el && panel.button === button) return closePanel();
-      closePanel();
-      button.classList.add('rcx-open');
-      openPanel(entry, button);
+      what();
     }, true);
   }
 
@@ -1662,8 +2046,8 @@
   function plainButton() {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'rcx-btn rcx-solo';
-    button.appendChild(icon());
+    button.className = 'rcx-btn rcx-btn-cite rcx-solo';
+    button.appendChild(icon('cite'));
     button.setAttribute('title', HINT);
     button.setAttribute('aria-label', 'Cite a reference');
     return button;
@@ -1684,19 +2068,19 @@
    * takes the press, and cannot be seen. So the borrowed markup keeps the
    * padding and the hover and loses everything that decides what is drawn; the
    * icon is ours, an SVG that owes the stylesheet nothing. */
-  function cloneButton(anchor) {
+  function cloneButton(anchor, kind) {
     const button = anchor.cloneNode(true);
     strip(button);
     for (const el of button.querySelectorAll('*')) strip(el);
 
     button.textContent = '';
-    button.appendChild(icon());
-    button.classList.add('rcx-btn');
+    button.appendChild(icon(kind));
+    button.classList.add('rcx-btn', `rcx-btn-${kind}`);
     if (button.tagName === 'BUTTON') button.type = 'button';
     button.setAttribute('role', 'button');
     button.setAttribute('tabindex', '0');
-    button.setAttribute('title', HINT);
-    button.setAttribute('aria-label', 'Cite a reference');
+    button.setAttribute('title', kind === 'chars' ? CHARS_HINT : HINT);
+    button.setAttribute('aria-label', kind === 'chars' ? 'Insert a character' : 'Cite a reference');
     return button;
   }
 
@@ -1713,7 +2097,22 @@
    * so it still takes the button's colour when the panel below it is open. */
   const ICON = 'http://www.w3.org/2000/svg';
 
-  function icon() {
+  /* Sized against the letters they stand next to rather than against the box
+     they are drawn in: at stroke 2 in a 24 box the first one came out a shade
+     thinner and shorter than the H3 beside it, which reads as "not quite a
+     button". Omega for the characters, because a palette of things that are
+     not on the keyboard has been called Ω for about thirty years. */
+  const ICONS = {
+    cite: ['M9.4 3.2H5.6v17.6h3.8',    // [
+           'M14.6 3.2h3.8v17.6h-3.8',  // ]
+           'M10.4 10 13 8.2V16.6',
+           'M10.6 16.6h4.8'],          // the 1
+    chars: ['M9.6 19.6c-2.3-1.5-3.6-3.8-3.6-6.5C6 8.9 8.7 5.4 12 5.4s6 3.5 6 7.7c0 2.7-1.3 5-3.6 6.5',
+            'M5.4 19.6h4.6',
+            'M14 19.6h4.6'],           // Ω
+  };
+
+  function icon(kind) {
     const svg = document.createElementNS(ICON, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('class', 'rcx-icon');
@@ -1723,13 +2122,7 @@
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
-    /* Sized against the letters it stands next to rather than against the
-       box it is drawn in: at stroke 2 in a 24 box it came out a shade thinner
-       and shorter than H3 beside it, which reads as "not quite a button". */
-    for (const d of ['M9.4 3.2H5.6v17.6h3.8',    // [
-                     'M14.6 3.2h3.8v17.6h-3.8',  // ]
-                     'M10.4 10 13 8.2V16.6',
-                     'M10.6 16.6h4.8']) {        // the 1
+    for (const d of ICONS[kind] || ICONS.cite) {
       const path = document.createElementNS(ICON, 'path');
       path.setAttribute('d', d);
       svg.appendChild(path);
@@ -1742,10 +2135,18 @@
    * keeps alt-shift-1..7 for its headings and this is not one of them. */
   function shortcut(e) {
     if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
-    if (String(e.key).toLowerCase() !== 'c') return;
+    const key = String(e.key).toLowerCase();
+    if (key !== 'c' && key !== 'x') return;
     const here = editors.find((t) => t.doc === e.target?.ownerDocument) || editors[0];
     if (!here?.button?.isConnected) return;
     e.preventDefault();
+
+    if (key === 'x') {
+      if (chars.el) return closeChars();
+      const on = here.chars?.isConnected ? here.chars : here.button;
+      on.classList.add('rcx-open');
+      return openChars(here, on);
+    }
     if (panel.el) return closePanel();
     here.button.classList.add('rcx-open');
     openPanel(here, here.button);
@@ -1895,6 +2296,30 @@
       overflow:hidden; color:#444; font-size:12px; line-height:17px;
     }
     .rcx-hit { background:#fde68a; font-weight:600; }
+
+    /* ————— the characters picker: the same panel, a grid instead of a list */
+    .rcx-chars { width:min(392px, calc(100vw - 16px)); }
+    .rcx-grid { overflow-y:auto; overscroll-behavior:contain; padding:0 8px 8px; }
+    .rcx-group {
+      padding:9px 2px 5px; color:#999; font-size:11px; font-weight:700;
+      letter-spacing:.04em; text-transform:uppercase;
+    }
+    .rcx-tiles { display:grid; grid-template-columns:repeat(9, 1fr); gap:3px; }
+    /* Big enough to read a hairline glyph like ′ or ¼ at a glance, and square
+       so the grid stays a grid whatever is in it. Serif for the characters
+       themselves: this is the one place where the shape of the mark IS the
+       content, and Open Sans draws several of these as near-identical bars. */
+    .rcx-tile {
+      display:flex; align-items:center; justify-content:center;
+      aspect-ratio:1; min-height:32px; padding:0;
+      border:1px solid transparent; border-radius:2px; background:transparent;
+      color:#333; font-family:Georgia, "Times New Roman", serif; font-size:17px;
+      line-height:1; cursor:pointer;
+    }
+    .rcx-tile:hover { background:rgba(91,45,144,.08); }
+    .rcx-tile.rcx-on {
+      background:#5b2d90; border-color:#5b2d90; color:#fff;
+    }
 
     .rcx-note { padding:12px 12px 14px; }
     .rcx-note-head { font-weight:600; color:#444; }

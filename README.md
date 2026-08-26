@@ -2,7 +2,8 @@
 
 # Radiopaedia Cite
 
-**A citation picker in the article editor's own toolbar, right beside `H3`.**
+**A citation picker in the article editor's own toolbar, right beside `H3` — and a `Ω` beside it
+for the characters that are not on the keyboard.**
 
 Press it and type. The references the article already has, filtered as you write — one press puts
 the number in the text, exactly where the caret was, in the shape the house style asks for. Paste an
@@ -38,6 +39,7 @@ caret in the text  →  [1]  →  ⏎                     →  the reference you
 - [Where the number goes](#where-the-number-goes)
 - [Adding a reference you have not got](#adding-a-reference-you-have-not-got)
 - [Several at once](#several-at-once)
+- [The characters that are not on the keyboard](#the-characters-that-are-not-on-the-keyboard)
 - [The keys](#the-keys)
 - [What it writes, and what it does not](#what-it-writes-and-what-it-does-not)
 - [How it finds the toolbar](#how-it-finds-the-toolbar)
@@ -166,11 +168,30 @@ A paragraph resting on three papers is written `<sup>2,5,9</sup>`, not three mar
 above the search box and clears the box for the next search; <kbd>⏎</kbd> cites the whole tray, in
 one marker, in order. <kbd>⌫</kbd> on an empty box takes the last one back.
 
+## The characters that are not on the keyboard
+
+The second button, `Ω`. A report says `≤5 mm`, `±2 SD`, `40 cm³`, `β-hCG`, `T1 → T2` — and every one
+of those costs a detour through a system palette or a key combination that is different on an
+Italian keyboard from an English one (the tilde alone is <kbd>alt</kbd><kbd>5</kbd> on one and a
+single key on the other).
+
+Same panel, same search, same return key, a grid instead of a list — and the search answers to
+**either language**: `greater` and `maggiore` both find `>`, `freccia` finds the arrows, `circa`
+finds `≈`. Paste a character and it finds itself. Six groups — maths and comparison, units and
+fractions, arrows, typography, Greek, signs — and the ones you have used lately move to the top and
+stay there between sessions.
+
+<kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> move through the grid, <kbd>⏎</kbd> writes the
+character at the caret, and the foot of the panel names whatever is under the cursor — so `′` and
+`″` and `‘` and `’`, which are four different marks and one shape, can be told apart before you
+commit to one.
+
 ## The keys
 
 | | |
 |---|---|
-| <kbd>alt</kbd><kbd>shift</kbd><kbd>C</kbd> | open the panel (works from inside the editor) |
+| <kbd>alt</kbd><kbd>shift</kbd><kbd>C</kbd> | open the citations panel (works from inside the editor) |
+| <kbd>alt</kbd><kbd>shift</kbd><kbd>X</kbd> | open the characters grid |
 | <kbd>↑</kbd> <kbd>↓</kbd> | choose |
 | <kbd>⏎</kbd> | cite it — or look it up, or confirm what came back |
 | <kbd>⌘</kbd><kbd>⏎</kbd> | put it in the tray and keep searching |
@@ -295,6 +316,23 @@ touches the network.
 
 Node, and `jsdom` fetched on first run. The userscript itself has no dependencies and no build step:
 what you install is the file in this repository.
+
+## Not done, on purpose
+
+**Renumbering.** When a reference list runs `1, 2, 2, 4`, the only real fix is to renumber the list
+into the order the markers appear and rewrite every marker to match — and that is the one operation
+that touches the whole article at once, silently, in a way that is tedious to check and worse to
+undo. It is also not obviously ours to do: whether an article's numbering should be rearranged under
+an editor is a question for Radiopaedia's editors, not for a userscript. So the panel *says* when
+the numbering is out of step, and cites what is actually written in front of each reference, and
+stops there. If the editors want it, it should arrive with a preview of every change before a
+single one is made.
+
+**Linking to other articles.** Radiopaedia's own editor already has a picker for it.
+
+**Anything the linter covers.** [Radiopaedia Lint](https://github.com/gmadevs/radiopaedia-lint-userscript)
+says what is wrong with the style of a reference and of the prose. This script manages numbers and
+characters. Where they start to overlap they will start to contradict each other.
 
 ## Settings
 

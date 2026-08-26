@@ -54,11 +54,15 @@ const buttonIn = (id) => doc.getElementById(`${id}-bar`).querySelector('.rcx-btn
      !!heads.querySelector('.rcx-btn'), true);
   is('beside H3, which is the last of them',
      heads.querySelector('.rcx-btn')?.previousElementSibling?.textContent, 'H3');
-  is('and nowhere else in that toolbar',
-     doc.getElementById(`${groups}-bar`).querySelectorAll('.rcx-btn').length, 1);
+  is('and the characters button right after it',
+     heads.querySelector('.rcx-btn')?.nextElementSibling?.classList.contains('rcx-btn-chars'), true);
+  is('and nothing else in that toolbar',
+     doc.getElementById(`${groups}-bar`).querySelectorAll('.rcx-btn').length, 2);
 
-  is('one button per field, and no more',
-     doc.querySelectorAll('.rcx-btn').length, 4);
+  is('one pair per field, and no more',
+     doc.querySelectorAll('.rcx-btn-cite').length, 4);
+  is('and a characters button with each',
+     doc.querySelectorAll('.rcx-btn-chars').length, 4);
 
   h.done();
 })().catch((e) => { console.error(e); process.exit(1); });
