@@ -18,7 +18,7 @@ const answerFor = (citation, extra = {}) => {
   is('button wears H3s classes', btn?.classList.contains('tox-tbtn'), true);
   is('every command attribute is stripped', btn?.getAttribute('data-mce-name'), null);
   is('it carries a drawn icon, not a word that a class could hide',
-     btn?.querySelector('svg.rcx-icon')?.querySelectorAll('path').length, 4);
+     btn?.querySelector('svg.rcx-icon')?.querySelectorAll('path').length, 2);
   is('and nothing of the icon it was cloned from', tidy(btn?.textContent), '');
 
   // ——— the panel, and "cite the last one" on open+return

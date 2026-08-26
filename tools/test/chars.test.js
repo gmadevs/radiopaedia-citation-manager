@@ -11,6 +11,8 @@ const chosen = () => doc.querySelector('.rcx-tile.rcx-on')?.textContent;
 is('the characters button is beside the citation one', !!glyphs(), true);
 is('and stands after it', cite()?.nextElementSibling, glyphs());
 is('with an omega drawn in it', glyphs()?.querySelector('svg.rcx-icon')?.querySelectorAll('path').length, 3);
+is('and the citation button wears a quotation mark',
+   cite()?.querySelector('svg.rcx-icon')?.querySelectorAll('path[fill="currentColor"]').length, 2);
 
 const p = doc.getElementById('p1').firstChild;
 setCaret(p, p.data.length);
@@ -22,13 +24,16 @@ is('and shows everything until you type', tiles().length > 60, true);
 
 type('greater');
 is('an English name finds it', tiles().map((t) => t.textContent).join(''), '>≥');
-type('maggiore');
-is('and so does the Italian one', tiles().map((t) => t.textContent).join(''), '>≥');
+type('bigger');
+is('and so does a word somebody might actually type',
+   tiles().map((t) => t.textContent).join(''), '>');
+type('cm3');
+is('cm3 finds the cubed sign', tiles().map((t) => t.textContent).join(''), '³');
 type('≤');
 is('a character finds itself', tiles().map((t) => t.textContent).join(''), '≤');
 
-type('freccia');
-is('the arrows answer to freccia', tiles().length, 6);
+type('arrow');
+is('arrow finds all six of them', tiles().length, 6);
 key($('.rcx-chars .rcx-q'), 'ArrowRight');
 is('the arrow keys move along the row', chosen(), '←');
 key($('.rcx-chars .rcx-q'), 'ArrowDown');

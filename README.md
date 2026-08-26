@@ -1,33 +1,43 @@
 <div align="center">
 
+<img src="docs/logo.svg" alt="" width="128">
+
 # Radiopaedia Cite
 
-**A citation picker in the article editor's own toolbar, right beside `H3` — and a `Ω` beside it
-for the characters that are not on the keyboard.**
+**A citation picker in the article editor's own toolbar, right beside `H3`.**
 
 Press it and type. The references the article already has, filtered as you write — one press puts
-the number in the text, exactly where the caret was, in the shape the house style asks for. Paste an
-identifier it has not got yet — a DOI, a PMID, a URL — and it is looked up on
+the number in the text, exactly where the caret was, in the shape the house style asks for: spaced,
+inside the sentence, joined to the marker beside it rather than doubled. Paste an identifier the
+article has not got yet — a DOI, a PMID, a URL — and it is looked up on
 [radiopaedia.work/cite](https://radiopaedia.work/cite), shown to you in full, and on your say-so
 **added as the next numbered reference and cited in the same press**.
 
+And beside it, a **`Ω`** for the characters that are not on the keyboard: `≤` `≥` `±` `×` `≈` `°`
+`µ` `²` `³` `→` `β` `Δ`, found by name.
+
 [![Install](https://img.shields.io/badge/Install-userscript-2ea44f?style=for-the-badge&logo=tampermonkey&logoColor=white)](https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js)
 
+[![Version](https://img.shields.io/github/v/release/gmadevs/radiopaedia-citation-manager?color=blue)](https://github.com/gmadevs/radiopaedia-citation-manager/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 [![Userscript](https://img.shields.io/badge/userscript-Tampermonkey-00485B?logo=tampermonkey&logoColor=white)](https://www.tampermonkey.net/)
 [![No build step](https://img.shields.io/badge/dependencies-none-lightgrey)](radiopaedia-cite.user.js)
 [![One file](https://img.shields.io/github/size/gmadevs/radiopaedia-citation-manager/radiopaedia-cite.user.js?label=one%20file&color=lightgrey)](radiopaedia-cite.user.js)
+[![Tests](https://img.shields.io/badge/tests-111%20checks-2ea44f)](tools/test)
+[![Last commit](https://img.shields.io/github/last-commit/gmadevs/radiopaedia-citation-manager?color=blue)](https://github.com/gmadevs/radiopaedia-citation-manager/commits/main)
 
 </div>
 
 ```
-caret in the text  →  [1]  →  ⏎                     →  the reference you added last
-                              type a word, ⏎        →  the reference that matches it
-                              paste a DOI, ⏎ ⏎      →  looked up, added as N, cited as N
+caret in the text  →  ❝  →  ⏎                     →  the reference you added last
+                           type a word, ⏎         →  the reference that matches it
+                           paste a DOI, ⏎ ⏎       →  looked up, added as N, cited as N
 
-               …haemangioblastoma) <sup>1</sup>.       a space before, inside the sentence
-               <sup>2</sup> + 3   → <sup>2,3</sup>     joined, never doubled
-               <sup>2,3</sup> + 4 → <sup>2-4</sup>     and closed up when they run on
+                      Ω  →  type a name, ⏎        →  ≤ ≥ ± × ≈ ~ ° µ ² ³ → β Δ …
+
+               …haemangioblastoma) <sup>1</sup>.     a space before, inside the sentence
+               <sup>2</sup> + 3   → <sup>2,3</sup>   joined, never doubled
+               <sup>2,3</sup> + 4 → <sup>2-4</sup>   and closed up when they run on
 ```
 
 ---
@@ -45,17 +55,49 @@ caret in the text  →  [1]  →  ⏎                     →  the reference you
 - [How it finds the toolbar](#how-it-finds-the-toolbar)
 - [When something is not right](#when-something-is-not-right)
 - [The tests](#the-tests)
+- [Not done, on purpose](#not-done-on-purpose)
 - [Settings](#settings)
+- [License](#license)
 
 ---
 
 ## Installing
 
-1. [Tampermonkey](https://www.tampermonkey.net/) (or Violentmonkey — both work).
-2. **[Install the script](https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js)**.
-3. Open any article's **Edit** page. A `[1]` button appears in the editor's toolbar, next to `H3`.
+This is a **userscript**, not an extension. You install a userscript manager once — every major
+browser has one, Safari included — and from then on the script updates itself from this repository
+and the manager stays out of the way. That is also why there is nothing to install per browser
+here: it is the same one file everywhere.
 
-Nothing to configure, no account, no key. It only does anything on `/edit` pages.
+**1. Install a userscript manager.**
+
+<div align="center">
+
+[![Chrome](https://img.shields.io/badge/Chrome-Tampermonkey-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+[![Edge](https://img.shields.io/badge/Edge-Tampermonkey-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
+[![Firefox](https://img.shields.io/badge/Firefox-Tampermonkey-FF7139?style=for-the-badge&logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/firefox/addon/tampermonkey/)
+[![Safari](https://img.shields.io/badge/Safari-Userscripts-1B9AF7?style=for-the-badge&logo=safari&logoColor=white)](https://apps.apple.com/app/userscripts/id1463298887)
+
+</div>
+
+| browser | what to install | worth knowing |
+| :-- | :-- | :-- |
+| Chrome | [Tampermonkey](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo) | nothing extra |
+| Edge | [Tampermonkey](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd) | nothing extra |
+| Firefox | [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/) | nothing extra |
+| Safari | [Userscripts](https://apps.apple.com/app/userscripts/id1463298887) — free, macOS and iOS | enable it in Safari → Settings → Extensions, and give it permission on `radiopaedia.org` |
+
+[Violentmonkey](https://violentmonkey.github.io/) works just as well on the first three. Nothing
+here is particular to one of them: the script asks for `GM_xmlhttpRequest`, `GM_addStyle` and
+`unsafeWindow`, and nothing else.
+
+**2. Open [`radiopaedia-cite.user.js`](https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js).**
+The manager recognises any URL ending in `.user.js` and offers to install it; from then on it
+checks the same URL for updates on its own. Failing that: Dashboard → **+** (new script) → paste
+the file → save.
+
+**3. Open any article's Edit page.** Two buttons appear in the editor's toolbar, next to `H3`.
+
+Nothing to configure, no account, no key. It does nothing at all on any other page.
 
 It sits happily beside **[Radiopaedia Lint](https://github.com/gmadevs/radiopaedia-lint-userscript)**
 and the two do not overlap: that one checks what a reference *says*, this one manages what number it
@@ -171,15 +213,14 @@ one marker, in order. <kbd>⌫</kbd> on an empty box takes the last one back.
 ## The characters that are not on the keyboard
 
 The second button, `Ω`. A report says `≤5 mm`, `±2 SD`, `40 cm³`, `β-hCG`, `T1 → T2` — and every one
-of those costs a detour through a system palette or a key combination that is different on an
-Italian keyboard from an English one (the tilde alone is <kbd>alt</kbd><kbd>5</kbd> on one and a
-single key on the other).
+of those costs a detour through a system palette, or a key combination that is different on every
+keyboard layout.
 
-Same panel, same search, same return key, a grid instead of a list — and the search answers to
-**either language**: `greater` and `maggiore` both find `>`, `freccia` finds the arrows, `circa`
-finds `≈`. Paste a character and it finds itself. Six groups — maths and comparison, units and
-fractions, arrows, typography, Greek, signs — and the ones you have used lately move to the top and
-stay there between sessions.
+Same panel, same search, same return key, a grid instead of a list. Each character answers to the
+words somebody would actually type looking for it: `lt` and `smaller` find `<`, `cm2` finds `²`,
+`at least` finds `≥`, `leads to` finds `→`, `sd` finds `±`. Paste a character and it finds itself.
+Six groups — maths and comparison, units and fractions, arrows, typography, Greek, signs — and the
+ones you have used lately move to the top and stay there between sessions.
 
 <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> move through the grid, <kbd>⏎</kbd> writes the
 character at the caret, and the foot of the panel names whatever is under the cursor — so `′` and
@@ -346,4 +387,10 @@ At the top of the script, and there are only three:
 
 ---
 
-MIT. Not affiliated with Radiopaedia.org.
+## License
+
+[MIT](LICENSE) © Giorgio Maria Agazzi
+
+Not affiliated with Radiopaedia.org. The citations themselves are resolved by
+[radiopaedia.work](https://radiopaedia.work/); this script is the picker, the numbering and the
+marker in the text.

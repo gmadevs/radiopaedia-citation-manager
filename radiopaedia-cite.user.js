@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.4.0
+// @version      1.5.0
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -1476,104 +1476,101 @@
    * not on the keyboard.
    *
    * A report says "≤5 mm", "±2 SD", "40 cm³", "β-hCG", "T1 → T2". Every one of
-   * those costs a detour — a search, a system palette, a remembered key
-   * combination that is different on an Italian keyboard from an English one
-   * (the tilde alone is alt-5 on one and a keystroke on the other). So: the
-   * same panel, the same search, the same return key, and a grid instead of a
-   * list.
+   * those costs a detour — a search, a system palette, or a key combination
+   * that is somewhere else on every keyboard layout. So: the same panel, the
+   * same search, the same return key, and a grid instead of a list.
    *
-   * The names are what gets searched, and they are given in both English and
-   * Italian: this is a tool for people who write English articles on an
-   * Italian keyboard, and "maggiore" is what you reach for when you cannot
-   * remember that ">" is called "greater than". A character is also its own
-   * search term, so pasting one finds it.
+   * The names are what gets searched, and each carries the words somebody
+   * might actually type looking for it: "lt" and "smaller" for `<`, "cm2" for
+   * `²`, "leads to" for `→`. A character is also its own search term, so
+   * pasting one finds it.
    */
   const CHARS = [
     ['Maths and comparison', [
-      ['<', 'less than', 'lt minore'],
-      ['>', 'greater than', 'gt maggiore'],
-      ['≤', 'less than or equal to', 'lte minore uguale'],
-      ['≥', 'greater than or equal to', 'gte maggiore uguale'],
-      ['±', 'plus minus', 'piu meno tolerance'],
-      ['×', 'multiplied by', 'times per dimensions'],
-      ['÷', 'divided by', 'diviso'],
-      ['≈', 'approximately equal to', 'circa about roughly'],
-      ['~', 'tilde', 'about circa approx'],
-      ['≠', 'not equal to', 'diverso different'],
-      ['°', 'degree', 'gradi angle temperature'],
-      ['∞', 'infinity', 'infinito'],
-      ['√', 'square root', 'radice'],
-      ['‰', 'per mille', 'per thousand'],
-      ['Δ', 'delta, change in', 'variazione difference'],
-      ['∅', 'empty set', 'vuoto none'],
+      ['<', 'less than', 'lt smaller under below'],
+      ['>', 'greater than', 'gt bigger over above'],
+      ['≤', 'less than or equal to', 'lte at most no more than'],
+      ['≥', 'greater than or equal to', 'gte at least no less than'],
+      ['±', 'plus minus', 'tolerance range error sd'],
+      ['×', 'multiplied by', 'times dimensions size by'],
+      ['÷', 'divided by', 'over ratio'],
+      ['≈', 'approximately equal to', 'about roughly around'],
+      ['~', 'tilde', 'about approximately roughly'],
+      ['≠', 'not equal to', 'different unequal'],
+      ['°', 'degree', 'angle temperature celsius'],
+      ['∞', 'infinity', 'endless unbounded'],
+      ['√', 'square root', 'radical'],
+      ['‰', 'per mille', 'per thousand permille'],
+      ['Δ', 'delta, change in', 'difference change interval'],
+      ['∅', 'empty set', 'none absent null'],
     ]],
     ['Units and fractions', [
-      ['µ', 'micro', 'micron mu um'],
-      ['²', 'squared', 'due quadrato superscript two cm2'],
-      ['³', 'cubed', 'tre cubo superscript three cm3'],
-      ['¹', 'superscript one', 'uno apice'],
-      ['Ω', 'ohm', 'omega resistance'],
-      ['′', 'prime, minutes', 'primo feet'],
-      ['″', 'double prime, seconds', 'secondi inches'],
-      ['½', 'one half', 'mezzo'],
-      ['⅓', 'one third', 'terzo'],
-      ['⅔', 'two thirds', 'due terzi'],
-      ['¼', 'one quarter', 'quarto'],
-      ['¾', 'three quarters', 'tre quarti'],
+      ['µ', 'micro', 'micron mu um microns'],
+      ['²', 'squared', 'superscript two cm2 mm2 area'],
+      ['³', 'cubed', 'superscript three cm3 mm3 volume'],
+      ['¹', 'superscript one', 'first raised'],
+      ['Ω', 'ohm', 'omega resistance impedance'],
+      ['′', 'prime, minutes', 'feet arcminute'],
+      ['″', 'double prime, seconds', 'inches arcsecond'],
+      ['½', 'one half', 'fraction half'],
+      ['⅓', 'one third', 'fraction third'],
+      ['⅔', 'two thirds', 'fraction thirds'],
+      ['¼', 'one quarter', 'fraction quarter'],
+      ['¾', 'three quarters', 'fraction quarters'],
     ]],
     ['Arrows', [
-      ['→', 'rightwards arrow', 'freccia destra becomes leads to'],
-      ['←', 'leftwards arrow', 'freccia sinistra'],
-      ['↑', 'upwards arrow', 'freccia su increased raised'],
-      ['↓', 'downwards arrow', 'freccia giu decreased reduced'],
-      ['↔', 'left right arrow', 'freccia doppia bidirectional'],
-      ['⇒', 'implies', 'freccia doppia therefore'],
+      ['→', 'rightwards arrow', 'right leads to becomes progresses'],
+      ['←', 'leftwards arrow', 'left back from'],
+      ['↑', 'upwards arrow', 'up raised increased elevated high'],
+      ['↓', 'downwards arrow', 'down reduced decreased low'],
+      ['↔', 'left right arrow', 'both bidirectional either way'],
+      ['⇒', 'implies', 'therefore hence double arrow'],
     ]],
     ['Typography', [
-      ['–', 'en dash, ranges', 'trattino range 5-10'],
-      ['—', 'em dash', 'trattino lungo'],
-      ['…', 'ellipsis', 'puntini omission'],
-      ['•', 'bullet', 'punto elenco'],
-      ['§', 'section', 'paragrafo'],
-      ['†', 'dagger', 'croce footnote'],
-      ['‡', 'double dagger', 'doppia croce footnote'],
-      ['®', 'registered', 'marchio trademark'],
-      ['™', 'trademark', 'marchio'],
-      ['©', 'copyright', 'diritti'],
-      ['“', 'left double quote', 'virgolette aperte'],
-      ['”', 'right double quote', 'virgolette chiuse'],
-      ['‘', 'left single quote', 'apice aperto'],
-      ['’', 'apostrophe', 'apostrofo right single quote'],
+      ['–', 'en dash, ranges', 'range between 5-10 hyphen'],
+      ['—', 'em dash', 'long dash aside'],
+      ['…', 'ellipsis', 'dots omission'],
+      ['•', 'bullet', 'dot list point'],
+      ['§', 'section', 'paragraph clause'],
+      ['†', 'dagger', 'footnote obelisk deceased'],
+      ['‡', 'double dagger', 'footnote diesis'],
+      ['®', 'registered', 'trademark'],
+      ['™', 'trademark', 'brand'],
+      ['©', 'copyright', 'rights'],
+      ['“', 'left double quote', 'open quotes curly'],
+      ['”', 'right double quote', 'close quotes curly'],
+      ['‘', 'left single quote', 'open quote curly'],
+      ['’', 'apostrophe', 'right single quote curly'],
     ]],
     ['Greek', [
-      ['α', 'alpha', 'alfa fetoprotein'],
-      ['β', 'beta', 'hcg'],
-      ['γ', 'gamma', 'camera knife'],
-      ['δ', 'delta small', 'piccolo'],
+      ['α', 'alpha', 'fetoprotein afp'],
+      ['β', 'beta', 'hcg blocker'],
+      ['γ', 'gamma', 'camera knife ray'],
+      ['δ', 'delta small', 'small change'],
       ['ε', 'epsilon', ''],
-      ['θ', 'theta', ''],
-      ['κ', 'kappa', 'light chain'],
-      ['λ', 'lambda', 'wavelength lunghezza onda'],
-      ['μ', 'mu', 'micro'],
+      ['θ', 'theta', 'angle'],
+      ['κ', 'kappa', 'light chain agreement'],
+      ['λ', 'lambda', 'wavelength light chain'],
+      ['μ', 'mu', 'micro mean'],
       ['π', 'pi', ''],
-      ['ρ', 'rho', 'density densita'],
-      ['σ', 'sigma', 'deviation deviazione'],
-      ['τ', 'tau', ''],
+      ['ρ', 'rho', 'density spearman'],
+      ['σ', 'sigma', 'deviation sd standard'],
+      ['τ', 'tau', 'protein tangles'],
       ['φ', 'phi', ''],
-      ['χ', 'chi', 'squared'],
+      ['χ', 'chi', 'squared test'],
       ['ψ', 'psi', ''],
-      ['ω', 'omega', ''],
-      ['Σ', 'sigma capital, sum', 'somma total'],
+      ['ω', 'omega', 'fatty acid'],
+      ['Σ', 'sigma capital, sum', 'total summation'],
       ['Φ', 'phi capital', ''],
       ['Λ', 'lambda capital', ''],
     ]],
     ['Signs', [
-      ['♀', 'female', 'femmina donna'],
-      ['♂', 'male', 'maschio uomo'],
-      ['✓', 'check', 'spunta yes present'],
-      ['✗', 'cross', 'croce no absent'],
-      ['Ø', 'diameter', 'diametro'],
-      ['↗', 'increasing', 'in aumento rising'],
+      ['♀', 'female', 'woman women sex'],
+      ['♂', 'male', 'man men sex'],
+      ['✓', 'check', 'tick yes present positive'],
+      ['✗', 'cross', 'no absent negative'],
+      ['Ø', 'diameter', 'width across'],
+      ['↗', 'increasing', 'rising trend up'],
     ]],
   ];
 
@@ -1622,7 +1619,7 @@
         '<button type="button" class="rcx-x" title="Close (esc)">×</button>' +
       '</div>' +
       '<input type="text" class="rcx-q" spellcheck="false" autocomplete="off" ' +
-        'placeholder="greater, tilde, micro, beta, freccia…">' +
+        'placeholder="greater, tilde, micro, beta, arrow…">' +
       '<div class="rcx-grid"></div>' +
       '<div class="rcx-foot"></div>';
 
@@ -2103,28 +2100,37 @@
      button". Omega for the characters, because a palette of things that are
      not on the keyboard has been called Ω for about thirty years. */
   const ICONS = {
-    cite: ['M9.4 3.2H5.6v17.6h3.8',    // [
-           'M14.6 3.2h3.8v17.6h-3.8',  // ]
-           'M10.4 10 13 8.2V16.6',
-           'M10.6 16.6h4.8'],          // the 1
-    chars: ['M9.6 19.6c-2.3-1.5-3.6-3.8-3.6-6.5C6 8.9 8.7 5.4 12 5.4s6 3.5 6 7.7c0 2.7-1.3 5-3.6 6.5',
-            'M5.4 19.6h4.6',
-            'M14 19.6h4.6'],           // Ω
+    // The quotation mark, filled: it is what a citation looks like everywhere
+    // else, and at nineteen pixels a solid shape stays a shape where a
+    // hairline stroke goes to mush.
+    cite: { fill: ['M6 17h3l2-4V7H5v6h3z', 'M14 17h3l2-4V7h-6v6h3z'] },
+    // Omega, because a palette of things that are not on the keyboard has been
+    // called Ω for about thirty years. Stroked, like the toolbar's own icons.
+    chars: { line: ['M9.6 19.6c-2.3-1.5-3.6-3.8-3.6-6.5C6 8.9 8.7 5.4 12 5.4s6 3.5 6 7.7c0 2.7-1.3 5-3.6 6.5',
+                    'M5.4 19.6h4.6',
+                    'M14 19.6h4.6'] },
   };
 
   function icon(kind) {
+    const shape = ICONS[kind] || ICONS.cite;
     const svg = document.createElementNS(ICON, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('class', 'rcx-icon');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '2.3');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
-    for (const d of ICONS[kind] || ICONS.cite) {
+    for (const d of shape.fill || []) {
       const path = document.createElementNS(ICON, 'path');
       path.setAttribute('d', d);
+      path.setAttribute('fill', 'currentColor');
+      svg.appendChild(path);
+    }
+    for (const d of shape.line || []) {
+      const path = document.createElementNS(ICON, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', 'currentColor');
+      path.setAttribute('stroke-width', '2.3');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
       svg.appendChild(path);
     }
     return svg;
