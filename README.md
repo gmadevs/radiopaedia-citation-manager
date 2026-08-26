@@ -1,0 +1,263 @@
+<div align="center">
+
+# Radiopaedia Cite
+
+**A citation picker in the article editor's own toolbar, right beside `H3`.**
+
+Press it and type. The references the article already has, filtered as you write — one press puts
+the number in the text, exactly where the caret was, in the shape the house style asks for. Paste an
+identifier it has not got yet — a DOI, a PMID, a URL — and it is looked up on
+[radiopaedia.work/cite](https://radiopaedia.work/cite), shown to you in full, and on your say-so
+**added as the next numbered reference and cited in the same press**.
+
+[![Install](https://img.shields.io/badge/Install-userscript-2ea44f?style=for-the-badge&logo=tampermonkey&logoColor=white)](https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js)
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+[![Userscript](https://img.shields.io/badge/userscript-Tampermonkey-00485B?logo=tampermonkey&logoColor=white)](https://www.tampermonkey.net/)
+[![No build step](https://img.shields.io/badge/dependencies-none-lightgrey)](radiopaedia-cite.user.js)
+[![One file](https://img.shields.io/github/size/gmadevs/radiopaedia-citation-manager/radiopaedia-cite.user.js?label=one%20file&color=lightgrey)](radiopaedia-cite.user.js)
+
+</div>
+
+```
+caret in the text  →  [1]  →  ⏎                     →  the reference you added last
+                              type a word, ⏎        →  the reference that matches it
+                              paste a DOI, ⏎ ⏎      →  looked up, added as N, cited as N
+
+               …haemangioblastoma) <sup>1</sup>.       a space before, inside the sentence
+               <sup>2</sup> + 3   → <sup>2,3</sup>     joined, never doubled
+               <sup>2,3</sup> + 4 → <sup>2-4</sup>     and closed up when they run on
+```
+
+---
+
+## Contents
+
+- [Installing](#installing)
+- [The three ways to cite](#the-three-ways-to-cite)
+- [Where the number goes](#where-the-number-goes)
+- [Adding a reference you have not got](#adding-a-reference-you-have-not-got)
+- [Several at once](#several-at-once)
+- [The keys](#the-keys)
+- [What it writes, and what it does not](#what-it-writes-and-what-it-does-not)
+- [How it finds the toolbar](#how-it-finds-the-toolbar)
+- [When something is not right](#when-something-is-not-right)
+- [The tests](#the-tests)
+- [Settings](#settings)
+
+---
+
+## Installing
+
+1. [Tampermonkey](https://www.tampermonkey.net/) (or Violentmonkey — both work).
+2. **[Install the script](https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js)**.
+3. Open any article's **Edit** page. A `[1]` button appears in the editor's toolbar, next to `H3`.
+
+Nothing to configure, no account, no key. It only does anything on `/edit` pages.
+
+It sits happily beside **[Radiopaedia Lint](https://github.com/gmadevs/radiopaedia-lint-userscript)**
+and the two do not overlap: that one checks what a reference *says*, this one manages what number it
+*is*. A citation added here is fetched from the same `radiopaedia.work/cite` that the `Lint citation`
+chip checks against, so it lands already agreeing with it.
+
+## The three ways to cite
+
+Put the caret where the citation belongs, press `[1]` (or <kbd>alt</kbd><kbd>shift</kbd><kbd>C</kbd>),
+and the panel opens with the words you are citing after shown along the top — so there is never a
+question of where the marker is about to land.
+
+**The one you added last.** It is the row the panel opens on, already chosen, because it is the
+reference you are most likely to be citing: you are writing the paragraph you added it for. Open,
+return, done.
+
+**One you already have.** Type any word of it — an author, the journal, the year, or the number
+itself. The list narrows as you write and what matched is lit up in the line. Return cites it.
+
+**One you have not got yet.** Paste [an identifier](#adding-a-reference-you-have-not-got) and it is
+looked up.
+
+Paste an identifier you have *already* cited and the panel says so — **Already reference 7** — and
+offers you that number instead of a second copy of the same paper. Which is, in practice, the
+fastest way of asking "which number was that paper again?". It recognises the paper by its DOI, its
+PMID, its PMCID, or by a link the reference already carries.
+
+## Where the number goes
+
+A marker is `<sup>1</sup>`, with **a space in front of it**, and it sits **inside** the sentence:
+
+> …distinguished from other enhancing spinal cord lesions (e.g. ependymoma, astrocytoma and
+> haemangioblastoma) <sup>1</sup>.
+
+Both of those are easy to get wrong by hand, so neither is left to the hand:
+
+- **The space** is added when the character before the caret is not one already — and not added at
+  the start of a paragraph, or when there is a space there.
+- **The full stop** is hopped: a caret parked immediately after the end of a sentence goes back
+  inside it, where the marker belongs. Commas, semicolons and colons likewise. A full stop that is
+  *not* the end of anything — `e.g.`, `i.e.`, `Fig.` — is left alone, because what follows it is a
+  small letter.
+
+And when the caret is already beside a marker, the number **joins** it rather than standing a second
+`<sup>` next to the first:
+
+| what is there | you cite | what you get |
+|---|---|---|
+| `<sup>2</sup>` | 3 | `<sup>2,3</sup>` |
+| `<sup>2,3</sup>` | 4 | `<sup>2-4</sup>` |
+| `<sup>4,2</sup>` | 9 | `<sup>2,4,9</sup>` |
+| `<sup>2</sup>` | 2 | `<sup>2</sup>`, unchanged |
+
+The whole marker is written back out from the numbers, so it also comes back sorted and
+deduplicated — which is the other thing hand-typed markers get wrong.
+
+`cm<sup>3</sup>` is a unit and not a citation, and it is left alone. What tells them apart is the
+space in front: a marker has one, an exponent never does. (A superscript that already says `1,2` or
+`2-4` is a citation wherever it stands — nothing is raised to the power of "1,2".)
+
+## Adding a reference you have not got
+
+It takes anything [radiopaedia.work/cite](https://radiopaedia.work/cite) takes:
+
+| | |
+|---|---|
+| **DOI** | `10.3174/ajnr.A3292`, `doi:10.3174/…`, or a `doi.org` link |
+| **PMID** | `23079405` |
+| **PMCID** | `PMC7964488` |
+| **PII** | Elsevier's item identifier — `S0140-6736(20)30183-5`, punctuated or not |
+| **ISBN** | `9780323393041`, hyphenated or not |
+| **Google Books** | a volume id — `zyTCAlFPjgYC` |
+| **URL** | a link to the paper, a Wikipedia page, or any other website |
+
+Anything else you type is treated as words: the references you already have are searched first, and
+a plain search of the citation tool is offered at the *bottom* of the list rather than the top —
+because "ependymoma" is overwhelmingly "cite the ependymoma paper I already have", and a lookup row
+standing above that would turn the commonest press in the panel into a web request nobody asked for.
+
+Paste the identifier, press return, and it goes to
+[radiopaedia.work/cite](https://radiopaedia.work/cite) — the same worker that resolves a reference
+against Crossref, PubMed, Google Books or Elsevier and gives back the canonical form of it.
+
+What comes back is **shown before anything is written**: the title, the journal and the year, and
+underneath them the citation itself, word for word, numbered with the number it is about to get.
+A mistyped PMID resolves perfectly well to somebody else's paper, and the only person who can tell
+is the one who knows which paper they meant.
+
+One more return and three things happen:
+
+1. Radiopaedia's own **Add another reference** is pressed and the new box is filled in with
+   `N. …` — their button, so the form fields are numbered the way the server expects;
+2. the marker `<sup>N</sup>` goes in at the caret;
+3. the line goes to the **clipboard** as well, so a lookup is never lost even if the box could not
+   be made.
+
+`N` is the next free number: the number of boxes, or the highest number written in them, whichever
+is larger. Handing out a number that is already taken is the one failure that quietly sends a marker
+to the wrong paper, so it errs upward.
+
+If the reference list is numbered out of step with itself — a `1, 2, 2, 4` — the panel says so along
+the bottom, and cites what is *written* in front of each reference rather than where it sits.
+Renumbering is not done here: it would mean rewriting every marker in the article, which is a
+different tool with a different appetite for risk.
+
+## Several at once
+
+A paragraph resting on three papers is written `<sup>2,5,9</sup>`, not three markers in a row.
+<kbd>⌘</kbd><kbd>⏎</kbd> (<kbd>ctrl</kbd><kbd>⏎</kbd> on Windows) drops the chosen number in the tray
+above the search box and clears the box for the next search; <kbd>⏎</kbd> cites the whole tray, in
+one marker, in order. <kbd>⌫</kbd> on an empty box takes the last one back.
+
+## The keys
+
+| | |
+|---|---|
+| <kbd>alt</kbd><kbd>shift</kbd><kbd>C</kbd> | open the panel (works from inside the editor) |
+| <kbd>↑</kbd> <kbd>↓</kbd> | choose |
+| <kbd>⏎</kbd> | cite it — or look it up, or confirm what came back |
+| <kbd>⌘</kbd><kbd>⏎</kbd> | put it in the tray and keep searching |
+| <kbd>⌫</kbd> | on an empty box: take the last one out of the tray |
+| <kbd>esc</kbd> | close |
+
+## What it writes, and what it does not
+
+Two places, both of them yours to undo:
+
+- the `<sup>` in the editor — selectable and deletable like any other text, and on TinyMCE it is on
+  the undo stack, so <kbd>⌘</kbd><kbd>Z</kbd> takes it back;
+- a new box at the bottom of the reference list.
+
+**Nothing is saved.** The form is still sitting there unsubmitted; the Save button is yours to press
+as it always was.
+
+The text of a reference is never rewritten — not the ones already there, and not the one it adds
+after it has added it. If what is down there differs from what the databases say, that is
+[Radiopaedia Lint](https://github.com/gmadevs/radiopaedia-lint-userscript)'s `Lint citation` chip's
+business, not this script's.
+
+One request leaves the browser, to `radiopaedia.work`, per lookup you confirm — and a lookup only
+ever happens because you typed an identifier and pressed return. Reading the references costs
+nothing: they are in the form. The answer is kept for the tab, so pasting the same PMID twice asks
+once.
+
+## How it finds the toolbar
+
+By finding `H3`. Not by a class name: the toolbar's markup belongs to whichever editor Radiopaedia
+is running this month, and a class read off it today is a button that vanishes the day they upgrade.
+The row of headings, on the other hand, is the feature — `P`, `H1`, `H2`, `H3` are what the house
+style allows, and they will still be called that.
+
+Which is also how the button gets its looks. It **is** `H3`, cloned — same tag, same classes, same
+padding, same hover — with every attribute except `class` and `style` stripped off it, on the button
+and on whatever it wraps. That stripping is the part that matters: an editor binds its commands
+through `data-` attributes and ids, and a clone that kept them would be a button that inserts a
+citation *and* turns your paragraph into a heading.
+
+## When something is not right
+
+**No button.** Open the console: the script prints one line on every edit page it runs on.
+
+```
+[Radiopaedia Cite] active · /articles/…/edit · editor page: true · editors: 1 · references: 11
+```
+
+No line at all means the script is not running — check it is enabled and that the page is under
+`radiopaedia.org`. `editors: 0` means it is running and did not find the toolbar, which is a
+different problem: the heading buttons have been renamed or moved.
+
+**"click in the text first".** The panel needs to know where the marker goes, and it takes that from
+the last place the caret was inside the article text. Click in the text, then press the button.
+
+**"The citation tool could not be reached" / a Cloudflare notice.** Open
+[radiopaedia.work](https://radiopaedia.work) in a tab, clear the check, and try again.
+
+**The reference box did not appear.** The citation is on the clipboard — add the box with
+Radiopaedia's own button and paste it in. The marker is not inserted in that case; cite it once the
+reference is down there.
+
+## The tests
+
+`tools/test/` mounts a fake edit page — toolbar, contenteditable, reference boxes, "Add another
+reference" and all — and drives the real script through it with real clicks and real keys, asserting
+on the HTML that comes out the other end. The one answer from `radiopaedia.work` is a saved one, so
+the citation parser is tested against the real thing rather than a hand-written idea of it. Nothing
+touches the network.
+
+```bash
+./tools/test/run.sh
+```
+
+Node, and `jsdom` fetched on first run. The userscript itself has no dependencies and no build step:
+what you install is the file in this repository.
+
+## Settings
+
+At the top of the script, and there are only three:
+
+| | |
+|---|---|
+| `RANGE_FROM` | how many consecutive numbers close up into a range. `3` — so `2,3` stays and `2,3,4` becomes `2-4`. Set to `2` and a pair closes up too. |
+| `HOP_PUNCTUATION` | whether a caret just after a full stop hops back inside the sentence. `true`. |
+| `CITE_URL` | the citation worker. |
+
+---
+
+MIT. Not affiliated with Radiopaedia.org.

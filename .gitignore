@@ -1,0 +1,6 @@
+# macOS
+.DS_Store
+
+# the test harness pulls jsdom in on demand
+tools/test/node_modules/
+tools/test/package-lock.json

@@ -1,0 +1,8 @@
+{
+  "name": "radiopaedia-cite-tests",
+  "private": true,
+  "description": "jsdom harness for radiopaedia-cite.user.js — not part of the userscript, which has no dependencies and no build step",
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

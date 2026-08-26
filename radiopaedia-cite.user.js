@@ -1,0 +1,1723 @@
+// ==UserScript==
+// @name         Radiopaedia Cite
+// @namespace    https://radiopaedia.work/
+// @homepageURL  https://github.com/gmadevs/radiopaedia-citation-manager
+// @supportURL   https://github.com/gmadevs/radiopaedia-citation-manager/issues
+// @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
+// @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
+// @license      MIT
+// @version      1.1.0
+// @description  A citation picker in the article editor's own toolbar, beside H3. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
+// @match        https://radiopaedia.org/*
+// @connect      radiopaedia.work
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        unsafeWindow
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==
+
+/*
+ * How this hangs together
+ * -----------------------
+ * Citing a paper on Radiopaedia is two things that live at opposite ends of
+ * the edit page and have to agree with each other: a `<sup>` marker in the
+ * prose, and a numbered line in the reference list at the bottom. The number
+ * is the only thing joining them. Nothing on the page checks that it is the
+ * right one, and by the twentieth reference nobody remembers which paper is
+ * eleven — so the marker gets typed from memory, or by scrolling down, losing
+ * the caret, scrolling back up and hoping.
+ *
+ * This is the other way round: the caret stays where it is, and the list comes
+ * to it. One button in the editor's own toolbar, beside H3; one panel; you
+ * type; you press return.
+ *
+ * Three things can be asked of it, and they are the three things a person
+ * actually wants:
+ *
+ *   - cite one of the references already down there. Type any word of it —
+ *     author, journal, year, the number itself — and the list narrows the way
+ *     Zotero's does. Return puts the marker in.
+ *   - cite the last one you added, which is the commonest of all: you have
+ *     just written a paragraph out of the paper you added a minute ago. It is
+ *     the row the panel opens on, so that press is open-and-return and nothing
+ *     else.
+ *   - cite a paper that is NOT down there yet. Paste anything the citation
+ *     tool can resolve — a DOI, a PMID, a PMCID, a PII, an ISBN, a Google
+ *     Books volume id, or a URL to the paper, to a Wikipedia page, to any
+ *     website — and it is looked up on radiopaedia.work/cite, shown to you in
+ *     full, and on your say-so added as the next numbered reference AND cited
+ *     in the text, in one press.
+ *
+ *     Which of those it is decides where the offer stands in the list, and
+ *     that is not a cosmetic decision: an identifier is unambiguous, so it
+ *     goes first and return looks it up. Words are not — "ependymoma" is
+ *     overwhelmingly "cite the ependymoma paper I already have" — so a plain
+ *     search goes last, under the references it might have meant.
+ *
+ * Where the number goes, and in what shape
+ * ----------------------------------------
+ * A marker is `<sup>1</sup>` with a space in front of it — `haemangioblastoma)
+ * <sup>1</sup>.` — and it sits INSIDE the sentence, before the full stop. Both
+ * of those are house style and both are easy to get wrong by hand, so neither
+ * is left to the hand: the space is added when the character before is not one
+ * already, and a caret parked immediately after a sentence's full stop hops
+ * back over it rather than dropping the marker outside the sentence.
+ *
+ * When the caret is already beside a marker, the number joins it instead of
+ * standing a second `<sup>` next to the first: `<sup>2</sup>` and 3 becomes
+ * `<sup>2,3</sup>`, and three or more in a row close up into a range —
+ * `<sup>2-4</sup>`. Written back out from the numbers, so the list also comes
+ * back sorted and deduplicated, which is the other thing hand-typed markers
+ * get wrong.
+ *
+ * What it writes, and what it does not
+ * ------------------------------------
+ * Two places, both of them yours to undo: the `<sup>` in the editor, and a new
+ * box in the reference list with `N. …` in it. Nothing is saved — the form is
+ * still sitting there unsubmitted, and every marker can be selected and
+ * deleted like any other text. The fetched citation also goes to the clipboard
+ * on its way past, so a lookup is never lost even if the box could not be
+ * created.
+ *
+ * The reference itself is never rewritten. If what is already down there
+ * differs from what the databases say, that is a job for the citation linter
+ * (radiopaedia-lint's `Lint citation` chip) and not for a tool whose business
+ * is the number.
+ *
+ * What it costs
+ * -------------
+ * One request, to radiopaedia.work/cite, per lookup you confirm — and a lookup
+ * only ever happens because you typed an identifier and pressed return.
+ * Reading the references costs nothing: they are in the form. The answer is
+ * kept for the tab, so pasting the same PMID twice asks once.
+ */
+
+(function () {
+  'use strict';
+
+  /* Two or more consecutive numbers can be written as a range, and how many
+   * it takes is a house rule rather than a law: Radiopaedia writes 2,3 for a
+   * pair and 2-4 from three up. Set this to 2 and a pair closes up as well. */
+  const RANGE_FROM = 3;
+
+  /* A caret sitting immediately after a full stop is a caret that meant to be
+   * just inside the sentence — that is where the marker belongs. Set to false
+   * to put the marker exactly where the caret is and nowhere else. */
+  const HOP_PUNCTUATION = true;
+
+  /* The citation worker: give it a PMID, a DOI, an ISBN, a URL or a reference,
+   * and it works out for itself what to look up and which of Crossref, PubMed,
+   * Google Books or Elsevier to ask. Same host and same endpoint the linter's
+   * `Lint citation` chip uses, so a citation added here is already in the
+   * shape that chip will agree with. */
+  const CITE_URL = 'https://radiopaedia.work/cite?search=';
+  const CITE_TIMEOUT = 60_000;      // somebody else's database is at the far end of it
+  const CITE_MAX = 1024 * 1024;     // a rendered page; anything bigger is not one
+  const CITE_KEY = 'rcx-cite:';     // one answer, for this tab's session
+
+  const BOX_TIMEOUT = 6_000;        // how long a new reference box gets to appear
+  const CONTEXT_CHARS = 46;         // how much of the sentence the panel shows back
+
+  // What a Cloudflare interstitial carries instead of the answer.
+  const CHALLENGE = ['start_challenge', 'bot_management', 'Verifying you are human'];
+
+  // ————————————————————————————————————————————————————————————— text
+
+  /* One line of it, whatever came in. */
+  function tidy(v) {
+    return String(v ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  /* Typography folded onto its plain forms, and the invisible characters taken
+   * out altogether. `\s` in JavaScript does not cover the zero-width space and
+   * Radiopaedia's text is full of them; one of those inside a `<sup>` is
+   * enough for a perfectly good marker to read as something that is not a
+   * marker at all. */
+  function fold(s) {
+    return String(s ?? '')
+      .replace(/[‘’ʼ]/g, "'")
+      .replace(/[“”]/g, '"')
+      .replace(/[–—−]/g, '-')
+      .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /* The text of something that arrived as markup. A reference is stored with
+   * its `<a>` tags spelled out, and what a person reads in a list of them is
+   * the words. `DOMParser` rather than an `innerHTML` on a detached node: the
+   * document it builds is inert, so nothing in there runs, loads or fetches.
+   * Strings with no `<` in them skip it, which is most of them. */
+  function plain(html) {
+    const raw = String(html ?? '');
+    if (!raw.includes('<')) return fold(raw);
+    return fold(new DOMParser().parseFromString(raw, 'text/html').body.textContent);
+  }
+
+  // Not a checksum: a short, stable key for a long string.
+  function shortHash(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+  }
+
+  const ordinal = (n) => {
+    const tens = n % 100, ones = n % 10;
+    const suffix = tens >= 11 && tens <= 13 ? 'th'
+      : ones === 1 ? 'st' : ones === 2 ? 'nd' : ones === 3 ? 'rd' : 'th';
+    return `${n}${suffix}`;
+  };
+
+  const inEditor = () => /\/edit\/?$/.test(location.pathname);
+
+  // ——————————————————————————————————————————————————————— the numbers
+
+  /* What a marker says, as numbers.
+   *
+   * `<sup>2,4,6</sup>`, `<sup>2-4</sup>`, `<sup>1</sup>` — and `null` for
+   * anything else, which is the answer that matters. A `<sup>` is not
+   * necessarily a citation: articles use it for units and for exponents, and
+   * merging a new reference number into `cm<sup>3</sup>` would be a strange
+   * way to lose an article. Only a superscript made of digits, commas and
+   * hyphens is one of ours, and even then a backwards or absurd range
+   * ("3-1", "1-400") is read as arithmetic rather than as a citation. */
+  function markerNumbers(text) {
+    const s = fold(text).replace(/\s+/g, '');
+    if (!s || !/^[\d,-]+$/.test(s)) return null;
+    const out = [];
+    for (const part of s.split(',')) {
+      const span = /^(\d{1,3})-(\d{1,3})$/.exec(part);
+      if (span) {
+        const from = +span[1], to = +span[2];
+        if (to <= from || to - from > 60) return null;
+        for (let n = from; n <= to; n++) out.push(n);
+        continue;
+      }
+      if (!/^\d{1,3}$/.test(part)) return null;
+      out.push(+part);
+    }
+    return out.length ? out : null;
+  }
+
+  /* And back the other way: the numbers, sorted, deduplicated, with runs of
+   * consecutive ones closed up into ranges. This is the only place a marker's
+   * text is ever written, which is why a marker this script has touched is
+   * always in order even when what it merged into was not. */
+  function markerText(numbers) {
+    const nums = [...new Set(numbers)].filter((n) => Number.isInteger(n) && n > 0)
+      .sort((a, b) => a - b);
+    const parts = [];
+    for (let i = 0; i < nums.length;) {
+      let j = i;
+      while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+      if (j - i + 1 >= RANGE_FROM) { parts.push(`${nums[i]}-${nums[j]}`); i = j + 1; }
+      else { parts.push(String(nums[i])); i++; }
+    }
+    return parts.join(',');
+  }
+
+  // —————————————————————————————————————————————————— the reference list
+
+  /* A reference, on the edit page, is a `<textarea>`: one per reference,
+   * holding the citation as source — the number, the text, and the `<a>` tags
+   * spelled out rather than rendered — with Radiopaedia's own "Format
+   * citation" link underneath it.
+   *
+   * That link is what says a box is a reference box. Behind it, for the day it
+   * is renamed, the shape of the value answers instead: a box whose text opens
+   * with its own number and carries a DOI, a PMID, an ISBN or a year. The
+   * article body is a textarea too — a big one, with no number at the front of
+   * it — and this is what keeps it out of the list.
+   *
+   * Walked in document order, because the order IS the numbering: a
+   * reference's number is right when it is the number of its place in the
+   * list, and its place in the list is where its box sits on the page. */
+  const REF_NUM = /^(\d{1,3})\s*[.)]\s+(?=\S)/;
+  const REF_SIGNS =
+    /(?:\bdoi[:.]|10\.\d{4,9}\/|pubmed|ncbi\.nlm\.nih\.gov|\bisbn\b|books\.google|\b(?:19|20)\d{2}[;:(]|\((?:19|20)\d{2}\))/i;
+  const FORMAT_LINK = 'format citation';
+  const ADD_LINK = 'add another reference';
+
+  function referenceBoxes() {
+    const anchors = new Set();
+    for (const link of document.querySelectorAll('a, button')) {
+      if (tidy(link.textContent).toLowerCase() !== FORMAT_LINK) continue;
+      const box = boxFor(link);
+      if (box) anchors.add(box);
+    }
+
+    const rows = [];
+    for (const input of document.querySelectorAll('textarea')) {
+      const raw = fold(input.value);
+      const numbered = REF_NUM.exec(raw);
+      const known = anchors.has(input);
+      if (!known) {
+        if (raw.length < 24 || !numbered || !REF_SIGNS.test(raw)) continue;
+      } else if (raw.length < 8) {
+        // A box somebody has opened and not filled in yet. It is a reference
+        // in waiting, not one you can cite.
+        continue;
+      }
+      rows.push(readRow(input, rows.length + 1));
+    }
+    return rows;
+  }
+
+  /* The box a link belongs to: the nearest ancestor holding a textarea, within
+   * a few steps. Not `previousElementSibling` — the link sits under the box on
+   * screen, and whatever markup lies between them is Radiopaedia's business. */
+  function boxFor(link) {
+    let node = link;
+    for (let up = 0; up < 4 && node; up++) {
+      node = node.parentElement;
+      const input = node?.querySelector('textarea');
+      if (input) return input;
+    }
+    return null;
+  }
+
+  /* One reference, as it stands NOW. Typing in a textarea changes no DOM and
+   * fires no mutation, so a row read when the page settled would be describing
+   * what the reference said then — everything here is read afresh each time
+   * the panel opens, and that is cheap enough not to think about. */
+  function readRow(input, pos) {
+    const raw = fold(input.value);
+    const numbered = REF_NUM.exec(raw);
+    const body = numbered ? raw.slice(numbered[0].length) : raw;
+    const text = plain(body);
+    const row = {
+      input, pos, raw, text,
+      typed: !!numbered,
+      n: numbered ? +numbered[1] : null,
+      pmid: identifier(raw, 'pmid'),
+      pmcid: identifier(raw, 'pmcid'),
+      doi: identifier(raw, 'doi'),
+      isbn: identifier(raw, 'isbn'),
+    };
+    // What gets searched: the words, the identifiers, and the number itself —
+    // so that typing "12" finds reference 12 and not only the papers with 12
+    // in the page range.
+    row.hay = [row.n, row.text, row.pmid, row.pmcid, row.doi, row.isbn]
+      .filter(Boolean).join(' ').toLowerCase();
+    return row;
+  }
+
+  /* The identifiers a reference carries, read off the source rather than off
+   * the words: the PMID is in the href of the Pubmed link, the DOI is in the
+   * href of the doi.org one. Both also appear as text, and both regexes are
+   * happy either way — which matters for a reference somebody pasted flat. */
+  const ID_PATTERNS = {
+    pmid: /(?:pubmed\/|pubmed\.ncbi\.nlm\.nih\.gov\/|\bpmid[:\s]*)(\d{4,9})/i,
+    pmcid: /\b(pmc\d{4,9})\b/i,
+    doi: /\b(10\.\d{4,9}\/[^\s"'<>)]+)/i,
+    isbn: /\bisbn(?:-1[03])?[:\s]*((?:97[89][- ]?)?[\d][\d- ]{7,15}[\dxX])/i,
+  };
+
+  function identifier(raw, kind) {
+    const hit = ID_PATTERNS[kind].exec(String(raw ?? ''));
+    if (!hit) return null;
+    // A DOI keeps its punctuation and loses only what a sentence put after it;
+    // a PMID and an ISBN are digits, and the spaces and hyphens people write
+    // them with are not part of them.
+    if (kind === 'doi') return hit[1].replace(/[.,;)]+$/, '').toLowerCase();
+    return hit[1].replace(/[\s-]/g, '').toLowerCase();
+  }
+
+  /* The number the next reference will have.
+   *
+   * Two answers, and the bigger one wins. Counting the boxes is right when the
+   * list is numbered 1..n, which is the normal state of an article; taking the
+   * highest number in it is right when a box has been left unnumbered or the
+   * list skips one, where counting would hand out a number that is already
+   * taken. Handing out a duplicate is the one failure that quietly sends a
+   * marker to the wrong paper, so this errs the other way. */
+  function nextNumber(rows) {
+    const highest = rows.reduce((max, r) => (r.n && r.n > max ? r.n : max), 0);
+    return Math.max(rows.length, highest) + 1;
+  }
+
+  /* Is the list numbered the way it stands? Said in the panel rather than
+   * fixed here: renumbering an article's references means renumbering every
+   * marker in the prose too, and that is a different tool with a different
+   * appetite for risk. */
+  const misnumbered = (rows) => rows.filter((r) => r.typed && r.n !== r.pos);
+
+  // ————————————————————————————————————————————————————— the lookup
+
+  /* One request, one identifier, one press of return. `@connect
+   * radiopaedia.work` covers it, and it is a GET: there is no POST anywhere in
+   * this file. */
+  function askCite(search) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: CITE_URL + encodeURIComponent(search),
+        timeout: CITE_TIMEOUT,
+        onload: (r) => {
+          const body = r.responseText || '';
+          if (CHALLENGE.some((m) => body.includes(m))) {
+            return reject(new Error(
+              'Cloudflare bot check. Open radiopaedia.work in a tab, clear the check, ' +
+              'then try again.'));
+          }
+          if (r.status >= 400) return reject(new Error(`The citation tool answered ${r.status}.`));
+          if (body.length > CITE_MAX) return reject(new Error('That answer was not a page.'));
+          const said = citeState(body);
+          if (!said) {
+            return reject(new Error(
+              'The citation tool answered with a page this script could not read. ' +
+              'Open it in a tab and check by hand.'));
+          }
+          resolve(said);
+        },
+        onerror: () => reject(new Error('The citation tool could not be reached.')),
+        ontimeout: () => reject(new Error('The citation tool took too long to answer.')),
+      });
+    });
+  }
+
+  /* Livewire keeps a component's state in a `wire:snapshot` attribute, as
+   * JSON, and the page `?search=…` renders already has the answer in it.
+   *
+   * `DOMParser` rather than a regular expression over the HTML: the document
+   * it builds is inert, and it unescapes the attribute for us — which done by
+   * hand is exactly where this would quietly break.
+   *
+   * `citation` is the canonical form, links and all, and it is what goes in
+   * the box. `meta` is what the database said about the paper, and it is what
+   * the panel shows you before you agree to it: a title and a year read at a
+   * glance, where eighty words of citation have to be read. Livewire tags its
+   * arrays as it serialises them — `[value, {"s":"arr"}]` — so both are
+   * searched for by key rather than reached at down a path a version bump
+   * would move. */
+  function citeState(html) {
+    const data = snapshot(html);
+    if (!data) return null;
+    const meta = deepFind(data.result, 'title') || {};
+    return {
+      citation: typeof data.citation === 'string' ? tidy(data.citation) : null,
+      error: typeof data.error === 'string' ? tidy(data.error) : null,
+      title: typeof meta.title === 'string' ? tidy(meta.title) : null,
+      journal: typeof meta.journal === 'string' ? tidy(meta.journal) : null,
+      year: meta.year == null ? null : String(meta.year),
+      pmid: meta.pmid == null ? null : String(meta.pmid),
+      doi: typeof meta.doi === 'string' ? meta.doi.toLowerCase() : null,
+    };
+  }
+
+  /* The component's state, out of the page it was rendered into.
+   *
+   * Walked rather than selected. `[wire\\:snapshot]` is a perfectly good CSS
+   * selector and Chrome answers it, but an escaped colon inside an attribute
+   * NAME is the corner of the grammar engines disagree about — and the whole
+   * lookup would then fail for a reason that has nothing to do with citations.
+   * `getAttribute` has no such corner. A page carrying more than one Livewire
+   * component is walked until the one holding a citation turns up, rather than
+   * assuming the first is ours. */
+  function snapshot(html) {
+    let doc;
+    try { doc = new DOMParser().parseFromString(html, 'text/html'); }
+    catch { return null; }
+    for (const el of doc.querySelectorAll('*')) {
+      const raw = el.getAttribute('wire:snapshot');
+      if (!raw) continue;
+      let snap;
+      try { snap = JSON.parse(raw); } catch { continue; }
+      const data = snap && typeof snap === 'object' ? snap.data : null;
+      if (!data || typeof data !== 'object') continue;
+      if ('citation' in data || 'result' in data) return data;
+    }
+    return null;
+  }
+
+  /* The first object in there that has this key, however deep it was buried. */
+  function deepFind(node, key, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 6) return null;
+    if (!Array.isArray(node) && Object.prototype.hasOwnProperty.call(node, key)) return node;
+    for (const v of Array.isArray(node) ? node : Object.values(node)) {
+      const hit = deepFind(v, key, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  /* Kept for the tab. The worker caches behind the same URL anyway, but this
+   * saves the round trip when the same PMID is pasted twice — which is what
+   * happens when you cite the same paper in two paragraphs and have forgotten
+   * that the first one added it. */
+  function citeCached(search) {
+    try {
+      const raw = sessionStorage.getItem(CITE_KEY + shortHash(search));
+      const said = raw ? JSON.parse(raw) : null;
+      return said && typeof said === 'object' ? said : null;
+    } catch { return null; }
+  }
+
+  function rememberCite(search, said) {
+    try { sessionStorage.setItem(CITE_KEY + shortHash(search), JSON.stringify(said)); }
+    catch { /* quota: never mind, it is one more request */ }
+  }
+
+  /* What kind of thing has been typed, if it is a thing at all.
+   *
+   * The tool works this out for itself and would take the string either way;
+   * the point of doing it here as well is the WORDING of the row you are about
+   * to press return on. "Look up PMID 23079405" and "Search for peritoneal
+   * carcinomatosis" promise different amounts, and the second one is a promise
+   * this cannot always keep — the tool resolves identifiers, and a title it
+   * has no identifier for comes back with nothing found. Saying which of the
+   * two is being asked is the difference between a tool that failed and a tool
+   * that told you what it was going to try. */
+  const KINDS = [
+    ['PMID', /^\d{6,9}$/],
+    ['PMID', /^pmid[:\s]*\d{4,9}$/i],
+    ['PMCID', /^(?:pmcid[:\s]*)?pmc\d{4,9}$/i],
+    ['DOI', /^(?:doi[:\s]*|https?:\/\/(?:dx\.)?doi\.org\/)?10\.\d{4,9}\/\S+$/i],
+    // Elsevier's item identifier, punctuated or not: S0140-6736(20)30183-5,
+    // S0140673620301835, and the book form B978-0-12-374984-0.00001-1.
+    ['PII', /^[SB]\d[\d\-().Xx]{8,30}$/],
+    ['ISBN', /^isbn[:\s-]*[\dxX -]{9,20}$/i],
+    ['ISBN', /^(?:97[89][- ]?)?[\d][\d -]{7,15}[\dxX]$/],
+    /* A Google Books volume id is twelve characters of base64-ish noise —
+     * `zyTCAlFPjgYC` — and nothing about its shape says "identifier". The
+     * lookaheads are what keep a twelve-letter English word ("conservative",
+     * "haemorrhagic") out of it: a volume id carries a capital or a digit as
+     * well as small letters, and a word does not. */
+    ['Google Books', /^(?=.*[a-z])(?=.*[A-Z0-9])[A-Za-z0-9_-]{12}$/],
+    ['URL', /^(?:https?:\/\/|www\.)\S+$/i],
+  ];
+
+  function lookupKind(query) {
+    const q = tidy(query);
+    if (!q) return null;
+    for (const [kind, test] of KINDS) if (test.test(q)) return kind;
+    return q.length >= 6 ? 'search' : null;
+  }
+
+  /* Is this thing already down there? Pasting a PMID you have cited before is
+   * not a mistake to be told off for — it is the commonest way of asking
+   * "which number was that paper again?", and it deserves the answer rather
+   * than a second copy of the reference. */
+  function alreadyCited(rows, query) {
+    const q = tidy(query).toLowerCase();
+    if (!q) return null;
+    const doi = /(10\.\d{4,9}\/\S+)/.exec(q)?.[1]?.replace(/[.,;)]+$/, '');
+    const pmid = /^(?:pmid[:\s]*)?(\d{4,9})$/.exec(q)?.[1];
+    const pmcid = /^(?:pmcid[:\s]*)?(pmc\d{4,9})$/.exec(q)?.[1];
+    /* A URL is compared as a substring of the reference, without its scheme
+     * and its trailing slash: the reference carries it inside an `<a href>`,
+     * where an exact comparison would be comparing a link to a citation. */
+    const url = /^(?:https?:\/\/|www\.)\S+$/.test(q)
+      ? q.replace(/^https?:\/\//, '').replace(/\/+$/, '') : null;
+    if (!doi && !pmid && !pmcid && !url) return null;
+    return rows.find((r) =>
+      (doi && r.doi === doi) ||
+      (pmid && r.pmid === pmid) ||
+      (pmcid && r.pmcid === pmcid) ||
+      (url && url.length > 12 && r.raw.toLowerCase().includes(url))) || null;
+  }
+
+  // ————————————————————————————————————————— writing the new reference
+
+  function addButton() {
+    for (const el of document.querySelectorAll('a, button')) {
+      if (tidy(el.textContent).toLowerCase() === ADD_LINK) return el;
+    }
+    return null;
+  }
+
+  /* Press Radiopaedia's own "Add another reference", wait for the box it makes,
+   * and put the citation in it.
+   *
+   * Their button rather than markup of our own: the form is a Rails nested
+   * field set and the names of the inputs carry indices that have to line up
+   * with what the server expects. Clicking the thing that knows how to do that
+   * is the only way to get a box that will actually save.
+   *
+   * The value is set through the prototype's own setter and followed by
+   * `input` and `change`. A plain `el.value = …` is enough for a plain form,
+   * and is silently not enough for anything watching the field — this costs
+   * three lines and covers both. */
+  async function addReference(text) {
+    const add = addButton();
+    if (!add) {
+      throw new Error('Cannot find Radiopaedia’s "Add another reference" button. ' +
+                      'The citation is on the clipboard — add the box yourself and paste it.');
+    }
+    const before = new Set([...document.querySelectorAll('textarea')]);
+    add.click();
+
+    const box = await new Promise((resolve) => {
+      const deadline = Date.now() + BOX_TIMEOUT;
+      (function poll() {
+        for (const el of document.querySelectorAll('textarea')) {
+          if (!before.has(el) && !el.value.trim()) return resolve(el);
+        }
+        if (Date.now() > deadline) return resolve(null);
+        setTimeout(poll, 120);
+      })();
+    });
+    if (!box) {
+      throw new Error('The new reference box did not appear. The citation is on the ' +
+                      'clipboard — paste it into a box yourself.');
+    }
+
+    setValue(box, text);
+    box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    box.classList.add('rcx-fresh');
+    setTimeout(() => box.classList.remove('rcx-fresh'), 2400);
+    return box;
+  }
+
+  function setValue(el, value) {
+    const own = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    if (own?.set) own.set.call(el, value); else el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // ————————————————————————————————————————————————————— the editor
+
+  /* Radiopaedia edits in a WYSIWYG: the text may live in an iframe or in a
+   * contenteditable, and an edit page has more than one of them — the article
+   * body, and whatever else the form is asking for. Each one gets its own
+   * button, its own caret and its own panel, because a citation belongs in the
+   * field it was asked for from. */
+  const EDITOR_SELECTORS = [
+    'iframe.tox-edit-area__iframe',
+    'iframe[id$="_ifr"]',
+    'div.tox-edit-area [contenteditable="true"]',
+    'div.mce-content-body[contenteditable="true"]',
+    'trix-editor',
+    'div.ql-editor',
+    '[contenteditable="true"]',
+  ];
+
+  function editableWithin(scope) {
+    const found = [];
+    const seen = new Set();
+    for (const sel of EDITOR_SELECTORS) {
+      for (const el of scope.querySelectorAll(sel)) {
+        if (el.closest('.rcx-panel') || seen.has(el)) continue;
+        seen.add(el);
+        if (el.tagName === 'IFRAME') {
+          let doc = null;
+          try { doc = el.contentDocument; } catch { /* never on someone else's iframe */ }
+          if (!doc?.body) continue;
+          found.push({ root: doc.body, doc, frame: el, host: el });
+          continue;
+        }
+        found.push({ root: el, doc: el.ownerDocument, frame: null, host: el });
+      }
+    }
+    // A contenteditable nested inside one already taken is the same text twice.
+    return found.filter((a, i) =>
+      !found.some((b, j) => j < i && !b.frame && b.root !== a.root && b.root.contains(a.root)));
+  }
+
+  /* Where the button goes.
+   *
+   * Beside H3, in the editor's own toolbar — and the way it is found is by
+   * finding H3 itself. Not by a class name: the toolbar's markup belongs to
+   * whichever editor Radiopaedia is running this month, and a class read off
+   * it today is a button that vanishes the day they upgrade. The row of
+   * headings, on the other hand, is the feature: P, H1, H2, H3 are what the
+   * house style allows, and they will still be called that.
+   *
+   * Which is also how the button gets its looks. It is H3, cloned — same tag,
+   * same classes, same padding, same hover — with everything else stripped
+   * off it. Stripping is the part that matters: an editor binds its commands
+   * through `data-` attributes and ids, and a clone that kept them would be a
+   * button that inserts a citation AND turns the paragraph into a heading. */
+  const HEADING_LABEL = 'h3';
+
+  function toolbarSpots() {
+    const spots = [];
+    for (const el of document.querySelectorAll('button, a, [role="button"]')) {
+      if (el.closest('.rcx-panel')) continue;
+      if (tidy(el.textContent).toLowerCase() !== HEADING_LABEL) continue;
+      const bar = el.parentElement;
+      if (!bar || bar.querySelector(':scope > .rcx-btn')) continue;
+      const box = el.getBoundingClientRect();
+      if (!box.width || !box.height) continue;   // attached is not the same as visible
+      spots.push({ h3: el, bar });
+    }
+    return spots;
+  }
+
+  /* The text this toolbar drives. Up a few steps from the bar, and the first
+   * editable inside what we land on — preferring one that comes AFTER the bar
+   * in document order, because a toolbar sits above its text and an editor
+   * wrapper can hold more than one field. */
+  function editorFor(bar) {
+    let scope = bar;
+    for (let up = 0; up < 6 && scope; up++) {
+      scope = scope.parentElement;
+      if (!scope) break;
+      const found = editableWithin(scope);
+      if (!found.length) continue;
+      const below = found.filter((f) =>
+        bar.compareDocumentPosition(f.host) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return below[0] || found[0];
+    }
+    return null;
+  }
+
+  // ————————————————————————————————————————————————————— the caret
+
+  /* Where the marker will land, and why it is remembered rather than read.
+   *
+   * The moment the panel's search box takes the focus, the editor's selection
+   * is gone — that is what focus means. So the caret is followed while you
+   * type, in the editor's own document, and the last position that was inside
+   * the text is the one the panel opens on. It survives clicking away to read
+   * a reference, tabbing to another field, and the panel itself.
+   *
+   * A Range is a pair of live pointers into the DOM. The editor rewrites its
+   * own nodes as you type, so one kept from five minutes ago may be pointing
+   * at a node that no longer belongs to the document — which is what
+   * `liveCaret` is for. */
+  const watched = new WeakSet();
+
+  function watchCaret(target) {
+    const doc = target.doc;
+    if (watched.has(doc)) return;
+    watched.add(doc);
+    doc.addEventListener('selectionchange', () => {
+      const sel = doc.getSelection?.();
+      if (!sel || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      for (const t of editors) {
+        if (t.doc === doc && t.root.contains(range.startContainer)) {
+          t.caret = range.cloneRange();
+        }
+      }
+    });
+  }
+
+  function liveCaret(target) {
+    const caret = target.caret;
+    if (!caret) return null;
+    const node = caret.startContainer;
+    if (!node || !node.isConnected || !target.root.contains(node)) return null;
+    const range = caret.cloneRange();
+    range.collapse(false);
+    return range;
+  }
+
+  /* The words the caret is sitting after, for the panel to show back. The
+   * whole anxiety of a floating picker is "where is this going to end up",
+   * and forty characters of the sentence answers it for nothing. */
+  function caretContext(target) {
+    const range = liveCaret(target);
+    if (!range) return null;
+    const before = target.doc.createRange();
+    const block = blockOf(range.startContainer, target.root);
+    before.setStart(block, 0);
+    try { before.setEnd(range.startContainer, range.startOffset); } catch { return null; }
+    const text = fold(before.toString());
+    if (!text) return null;
+    return (text.length > CONTEXT_CHARS ? '…' + text.slice(-CONTEXT_CHARS) : text);
+  }
+
+  const BLOCKS = 'P,LI,H1,H2,H3,H4,H5,H6,TD,TH,BLOCKQUOTE,DD,DT,DIV';
+
+  function blockOf(node, root) {
+    let el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    while (el && el !== root) {
+      if (BLOCKS.includes(el.tagName)) return el;
+      el = el.parentElement;
+    }
+    return root;
+  }
+
+  // ——————————————————————————————————————————————— putting the marker in
+
+  /* The one function that writes into the article.
+   *
+   * Four things happen here and they are worth naming separately, because
+   * three of them are house style and the fourth is arithmetic:
+   *
+   *   1. a marker already beside the caret is JOINED rather than doubled;
+   *   2. a caret parked just after a sentence's full stop hops back inside;
+   *   3. a space is put in front, when there is not one there already;
+   *   4. the numbers are written back out sorted, deduplicated and ranged.
+   *
+   * Everything is done on Ranges over the editor's own nodes rather than by
+   * `execCommand` or by writing HTML: `insertHTML` on a caret that sits inside
+   * a `<sup>` produces a nested one, and a nested `<sup>` is a marker that
+   * reads right and saves wrong. */
+  function insertCitation(target, numbers) {
+    const range = liveCaret(target);
+    if (!range) return { ok: false, why: 'caret' };
+    const doc = target.doc;
+
+    const near = adjacentMarker(target, range);
+    if (near) {
+      const have = markerNumbers(near.textContent) || [];
+      const merged = markerText([...have, ...numbers]);
+      if (merged === fold(near.textContent)) {
+        settle(target, near);
+        return { ok: true, marker: merged, merged: true, already: true };
+      }
+      near.textContent = merged;
+      settle(target, near);
+      return { ok: true, marker: merged, merged: true };
+    }
+
+    const at = (HOP_PUNCTUATION && hopPunctuation(range)) || range;
+    const sup = doc.createElement('sup');
+    sup.textContent = markerText(numbers);
+
+    const spaced = wantsSpace(at);
+    at.insertNode(sup);
+    if (spaced) sup.parentNode.insertBefore(doc.createTextNode(' '), sup);
+    settle(target, sup);
+    return { ok: true, marker: sup.textContent, merged: false };
+  }
+
+  /* A `<sup>` the caret is in, or immediately beside, with nothing but space
+   * between. Both directions: a caret typed to the left of an existing marker
+   * means the same thing as one typed to its right. */
+  function adjacentMarker(target, range) {
+    const el = range.startContainer.nodeType === Node.ELEMENT_NODE
+      ? range.startContainer : range.startContainer.parentElement;
+    const inside = el?.closest?.('sup');
+    if (inside && target.root.contains(inside) && isMarker(inside, target.root)) return inside;
+    for (const dir of [-1, 1]) {
+      const side = sideNode(range, dir);
+      if (side?.tagName === 'SUP' && isMarker(side, target.root)) return side;
+    }
+    return null;
+  }
+
+  /* Is this superscript a citation, or is it arithmetic?
+   *
+   * `cm<sup>3</sup>` reads as a marker to anything that only looks at the
+   * digits, and merging a reference number into it — `cm<sup>3,5</sup>` — is
+   * a quiet, permanent, hard-to-spot way of ruining a sentence. What tells
+   * them apart is the space in front, the same space this script puts there:
+   * a marker has one (or starts the paragraph), and a unit never does.
+   *
+   * The exception is a superscript that says 1,2 or 2-4. Nothing is raised to
+   * the power of "1,2", so a list is a citation wherever it is standing. */
+  function isMarker(sup, root) {
+    if (!markerNumbers(sup.textContent)) return false;
+    if (/[,-]/.test(fold(sup.textContent))) return true;
+    const before = sup.ownerDocument.createRange();
+    try {
+      before.setStart(blockOf(sup, root), 0);
+      before.setEndBefore(sup);
+    } catch { return true; }
+    const text = before.toString();
+    return text === '' || /\s$/.test(text);
+  }
+
+  /* The element on one side of a boundary point, with whitespace stepped over
+   * and real text taken as a wall: `word |<sup>` is beside it, `word x|<sup>`
+   * is not. */
+  function sideNode(range, dir) {
+    const node = range.startContainer;
+    const at = range.startOffset;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const rest = dir < 0 ? node.data.slice(0, at) : node.data.slice(at);
+      if (rest.trim() !== '') return null;
+      return skipBlank(dir < 0 ? node.previousSibling : node.nextSibling, dir);
+    }
+    return skipBlank(dir < 0 ? node.childNodes[at - 1] : node.childNodes[at], dir);
+  }
+
+  function skipBlank(node, dir) {
+    while (node && node.nodeType === Node.TEXT_NODE && node.data.trim() === '') {
+      node = dir < 0 ? node.previousSibling : node.nextSibling;
+    }
+    return node?.nodeType === Node.ELEMENT_NODE ? node : null;
+  }
+
+  /* Back over the punctuation, so the marker lands inside the sentence.
+   *
+   * `metastases.|` becomes `metastases <sup>1</sup>.`, which is how every
+   * reference on the site is written. A comma, a semicolon and a colon are
+   * hopped without asking — a marker belongs before them for the same reason.
+   * A full stop is only hopped when it ENDS something: the end of the block,
+   * or whitespace and then a capital. That test is the whole reason "e.g." and
+   * "i.e." and "Fig." survive: what follows them is a small letter, so the
+   * caret stays where you put it. */
+  const SENTENCE_END = /^\s+["'“‘(]?[A-Z0-9]|^\s*$/;
+
+  function hopPunctuation(range) {
+    const node = range.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE || range.startOffset < 1) return null;
+    const at = range.startOffset;
+    const mark = node.data[at - 1];
+    if (!'.,;:'.includes(mark)) return null;
+    if (mark === '.') {
+      const after = node.data.slice(at);
+      const tail = after.trim() === '' ? restOfBlockAfter(node, range) : after;
+      if (!SENTENCE_END.test(tail)) return null;
+    }
+    const hop = node.ownerDocument.createRange();
+    hop.setStart(node, at - 1);
+    hop.collapse(true);
+    return hop;
+  }
+
+  /* What comes after this text node inside the same block, for the full-stop
+   * test: a period at the end of its own node is still mid-sentence when the
+   * next node picks the sentence up again — `<em>Fig.</em> 3` is exactly that
+   * shape. */
+  function restOfBlockAfter(node, range) {
+    const block = blockOf(node, node.ownerDocument.body);
+    const rest = node.ownerDocument.createRange();
+    try {
+      rest.setStart(node, range.startOffset);
+      rest.setEnd(block, block.childNodes.length);
+    } catch { return ''; }
+    return rest.toString();
+  }
+
+  /* House style has a space before the marker. It is not put there twice, and
+   * it is not put at the start of a paragraph. */
+  function wantsSpace(range) {
+    const node = range.startContainer;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const before = node.data.slice(0, range.startOffset);
+      if (before === '') return !!sideNode(range, -1);
+      return before.slice(-1).trim() !== '';
+    }
+    const side = sideNode(range, -1);
+    return !!side;
+  }
+
+  /* Afterwards: the caret goes back to just after the marker — so you can keep
+   * typing the sentence — and the editor is told that its content changed.
+   *
+   * Told twice, because the two ways of listening are not the same. `input`
+   * covers anything watching the field the ordinary way. TinyMCE keeps its own
+   * undo stack and its own "is this dirty" flag, and a DOM change made behind
+   * its back is in neither: without `undoManager.add()` the marker cannot be
+   * undone with ctrl-Z, and without `setDirty(true)` leaving the page may not
+   * warn you that there is something unsaved. Every line of it is optional and
+   * guarded — this works on a plain contenteditable with no editor at all. */
+  function settle(target, el) {
+    const doc = target.doc;
+    try {
+      const sel = doc.getSelection();
+      const after = doc.createRange();
+      after.setStartAfter(el);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
+      target.caret = after.cloneRange();
+    } catch { /* the marker is in; the caret is a courtesy */ }
+
+    try {
+      const view = doc.defaultView || window;
+      target.root.dispatchEvent(new view.Event('input', { bubbles: true }));
+    } catch { /* older engines: the editor will read the DOM at save time */ }
+
+    try {
+      const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      for (const ed of page.tinymce?.editors || []) {
+        const body = ed.getBody?.();
+        if (body !== target.root && !(body && body.contains(target.root))) continue;
+        ed.undoManager?.add?.();
+        ed.setDirty?.(true);
+        ed.nodeChanged?.();
+      }
+    } catch { /* no TinyMCE, or a version that keeps its editors elsewhere */ }
+  }
+
+  // ————————————————————————————————————————————————————— the panel
+
+  /* One panel at a time, for one editor at a time. Everything it shows is read
+   * when it opens: the references as they stand in the form, the caret as it
+   * stands in the text, the next free number. Nothing is cached between
+   * openings, because everything here is something you may have changed in
+   * between — and rereading eleven textareas is not work worth saving. */
+  const editors = [];
+  const panel = {
+    el: null, target: null, button: null,
+    rows: [], view: [], at: 0, batch: [], query: '',
+    mode: 'pick',      // pick · asking · found · adding · trouble
+    found: null, trouble: null, next: 1,
+  };
+
+  function openPanel(target, button) {
+    closePanel();
+    panel.target = target;
+    panel.button = button;
+    panel.batch = [];
+    panel.query = '';
+    panel.mode = 'pick';
+    panel.found = null;
+    panel.trouble = null;
+
+    const el = document.createElement('div');
+    el.className = 'rcx-panel';
+    el.innerHTML =
+      '<div class="rcx-head">' +
+        '<span class="rcx-lede">Cite</span>' +
+        '<span class="rcx-where"></span>' +
+        '<button type="button" class="rcx-x" title="Close (esc)">×</button>' +
+      '</div>' +
+      '<div class="rcx-batch" hidden></div>' +
+      '<input type="text" class="rcx-q" spellcheck="false" autocomplete="off">' +
+      '<div class="rcx-list" role="listbox"></div>' +
+      '<div class="rcx-foot"></div>';
+
+    document.body.appendChild(el);
+    panel.el = el;
+
+    el.querySelector('.rcx-x').addEventListener('click', closePanel);
+    const q = el.querySelector('.rcx-q');
+    q.addEventListener('input', () => { panel.query = q.value; recount(); render(); });
+    q.addEventListener('keydown', onKey);
+    el.addEventListener('mousedown', (e) => {
+      // Keep the editor's selection alive: a click anywhere in here must not
+      // move the focus out of the search box.
+      if (e.target !== q) e.preventDefault();
+    });
+
+    recount();
+    render();
+    place();
+    q.focus();
+
+    addEventListener('scroll', place, true);
+    addEventListener('resize', place);
+    document.addEventListener('mousedown', outside, true);
+    document.addEventListener('keydown', onEscape, true);
+  }
+
+  function closePanel() {
+    if (!panel.el) return;
+    removeEventListener('scroll', place, true);
+    removeEventListener('resize', place);
+    document.removeEventListener('mousedown', outside, true);
+    document.removeEventListener('keydown', onEscape, true);
+    panel.el.remove();
+    panel.el = null;
+    panel.button?.classList.remove('rcx-open');
+    panel.button = null;
+  }
+
+  const outside = (e) => {
+    if (!panel.el) return;
+    if (panel.el.contains(e.target) || panel.button?.contains(e.target)) return;
+    closePanel();
+  };
+
+  const onEscape = (e) => {
+    if (e.key === 'Escape' && panel.el) { e.stopPropagation(); closePanel(); }
+  };
+
+  /* Under the button, and inside the window. `position:fixed` and placed from
+   * here rather than in CSS, because what it hangs off is a toolbar that
+   * scrolls with the form — and because the form is long enough that a panel
+   * opened near the bottom of the screen has to open upwards instead. */
+  function place() {
+    if (!panel.el || !panel.button?.isConnected) return closePanel();
+    const box = panel.button.getBoundingClientRect();
+    const el = panel.el;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const room = innerHeight - box.bottom - 12;
+    const up = room < h && box.top > room;
+    el.style.left = `${Math.max(8, Math.min(box.left, innerWidth - w - 8))}px`;
+    el.style.top = up ? `${Math.max(8, box.top - h - 6)}px` : `${box.bottom + 6}px`;
+    el.style.maxHeight = `${Math.max(220, up ? box.top - 16 : room)}px`;
+  }
+
+  // ————————————————————————————————————————————— what the panel offers
+
+  /* The rows, rebuilt from the form and the query.
+   *
+   * Order is the point. The reference you added last is the one you are most
+   * likely to be citing — you are writing the paragraph you added it for — so
+   * it stands first and the panel opens with it already chosen. Open, return,
+   * done: the commonest citation in the world costs two keys. Everything else
+   * is the list in its own order, which is the order the article prints. */
+  function recount() {
+    panel.rows = referenceBoxes();
+    panel.next = nextNumber(panel.rows);
+    const terms = tidy(panel.query).toLowerCase().split(' ').filter(Boolean);
+    const view = [];
+
+    const already = alreadyCited(panel.rows, panel.query);
+    if (already) {
+      view.push({ kind: 'ref', row: already, badge: numberOf(already),
+                  lede: 'Already reference ' + numberOf(already) });
+    }
+
+    /* The lookup row, and where in the list it stands — which is a decision
+     * about what return means.
+     *
+     * A PMID is not ambiguous: nobody types nine digits into a search box
+     * hoping to find a reference whose page range happens to contain them. So
+     * an identifier goes first and return looks it up.
+     *
+     * Words are the other way round. "ependymoma" is overwhelmingly "cite the
+     * ependymoma paper I already have", and a lookup row standing above it
+     * would turn the commonest press in the panel into a web request for
+     * something you were not asking for. It goes last, where it is a way out
+     * rather than the way. */
+    const kind = lookupKind(panel.query);
+    const lookup = kind && !already
+      ? { kind: 'lookup', badge: String(panel.next),
+          lede: kind === 'search'
+            ? `Search radiopaedia.work for “${short(panel.query)}”`
+            : `Look up ${kind} ${short(panel.query)}`,
+          sub: `Adds it as reference ${panel.next} and cites it here` }
+      : null;
+    if (lookup && kind !== 'search') view.push(lookup);
+
+    const last = panel.rows[panel.rows.length - 1];
+    if (!terms.length && last) {
+      view.push({ kind: 'ref', row: last, badge: numberOf(last), lede: 'Last reference' });
+    }
+
+    for (const row of panel.rows) {
+      if (already === row) continue;
+      if (!terms.length && row === last) continue;
+      if (terms.length && !terms.every((t) => row.hay.includes(t))) continue;
+      view.push({ kind: 'ref', row, badge: numberOf(row) });
+    }
+
+    if (lookup && kind === 'search') view.push(lookup);
+
+    panel.view = view;
+    // A new query is a new list, and the row you were on is not in it. The
+    // arrow keys move `at` afterwards; nothing that rebuilds preserves it.
+    panel.at = 0;
+  }
+
+  /* A URL is two hundred characters long and this row is one line high. */
+  const short = (text, max = 46) => {
+    const one = tidy(text);
+    return one.length > max ? one.slice(0, max - 1) + '…' : one;
+  };
+
+  // What number this reference will be cited by: the one written in front of
+  // it, and where there is none, its place in the list.
+  const numberOf = (row) => (row.typed ? row.n : row.pos);
+
+  function render() {
+    const el = panel.el;
+    if (!el) return;
+    const list = el.querySelector('.rcx-list');
+    const foot = el.querySelector('.rcx-foot');
+    const where = el.querySelector('.rcx-where');
+    const q = el.querySelector('.rcx-q');
+    list.textContent = '';
+
+    const caret = caretContext(panel.target);
+    where.textContent = caret ? `after ${caret}` : 'click in the text first';
+    where.classList.toggle('rcx-nowhere', !caret);
+
+    if (panel.mode === 'asking' || panel.mode === 'adding') {
+      list.appendChild(note(panel.mode === 'asking'
+        ? 'Asking radiopaedia.work…' : 'Adding the reference…',
+        panel.mode === 'asking'
+          ? 'It is looking the identifier up in Crossref, PubMed or Google Books.'
+          : 'A new box at the bottom of the reference list, and the marker in the text.'));
+      foot.textContent = 'esc  cancel';
+      return;
+    }
+
+    if (panel.mode === 'trouble') {
+      list.appendChild(note('Nothing came back', panel.trouble, 'rcx-trouble'));
+      foot.textContent = '⏎  try again    esc  close';
+      return;
+    }
+
+    if (panel.mode === 'found') {
+      const said = panel.found;
+      list.appendChild(preview(said));
+      foot.textContent = `⏎  add as reference ${panel.next} and cite it    esc  cancel`;
+      return;
+    }
+
+    q.placeholder = panel.rows.length
+      ? `Search ${panel.rows.length} reference${panel.rows.length > 1 ? 's' : ''}, ` +
+        'or paste a DOI, PMID, URL…'
+      : 'Paste a DOI, PMID, PMCID, PII, ISBN, Google Books id or URL…';
+
+    const terms = tidy(panel.query).toLowerCase().split(' ').filter(Boolean);
+    if (!panel.view.length) {
+      list.appendChild(note('Nothing matches',
+        'No reference here has those words in it, and what you typed is too short to look up.'));
+    }
+    panel.view.forEach((item, i) => list.appendChild(rowEl(item, i, terms)));
+
+    const odd = misnumbered(panel.rows);
+    const batch = el.querySelector('.rcx-batch');
+    batch.textContent = '';
+    batch.hidden = !panel.batch.length;
+    for (const n of panel.batch) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'rcx-chip';
+      chip.textContent = `${n} ×`;
+      chip.addEventListener('click', () => {
+        panel.batch = panel.batch.filter((x) => x !== n);
+        render();
+      });
+      batch.appendChild(chip);
+    }
+
+    foot.textContent = panel.batch.length
+      ? `⏎  cite ${markerText(panel.batch)}    ⌘⏎  add another    esc  close`
+      : '↑↓  choose    ⏎  cite    ⌘⏎  cite several    esc  close';
+    if (odd.length) {
+      const warn = document.createElement('span');
+      warn.className = 'rcx-odd';
+      warn.textContent = ` · ${odd.length} reference${odd.length > 1 ? 's are' : ' is'} ` +
+        'numbered out of place';
+      warn.title = odd.map((r) => `numbered ${r.n}, and it is the ${ordinal(r.pos)}`).join('\n') +
+        '\n\nThe number in front of the reference is what gets cited.';
+      foot.appendChild(warn);
+    }
+
+    if (panel.view.length) {
+      const chosen = list.children[panel.at];
+      chosen?.classList.add('rcx-on');
+      chosen?.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function note(head, body, extra) {
+    const el = document.createElement('div');
+    el.className = `rcx-note ${extra || ''}`;
+    const h = document.createElement('div');
+    h.className = 'rcx-note-head';
+    h.textContent = head;
+    const p = document.createElement('div');
+    p.className = 'rcx-note-body';
+    p.textContent = body;
+    el.append(h, p);
+    return el;
+  }
+
+  /* What came back, before you agree to it. The title and the year are what a
+   * person checks — "yes, that is the paper" — and the citation underneath is
+   * what will actually be written, word for word, so there is nothing to find
+   * out afterwards. */
+  function preview(said) {
+    const el = document.createElement('div');
+    el.className = 'rcx-found';
+    const head = document.createElement('div');
+    head.className = 'rcx-found-head';
+    head.textContent = said.title || 'Found';
+    const meta = document.createElement('div');
+    meta.className = 'rcx-found-meta';
+    meta.textContent = [said.journal, said.year, said.pmid && `PMID ${said.pmid}`]
+      .filter(Boolean).join(' · ');
+    const body = document.createElement('div');
+    body.className = 'rcx-found-body';
+    body.textContent = `${panel.next}. ${plain(said.citation)}`;
+    el.append(head, meta, body);
+    return el;
+  }
+
+  function rowEl(item, i, terms) {
+    const el = document.createElement('div');
+    el.className = `rcx-row rcx-row-${item.kind}`;
+    el.setAttribute('role', 'option');
+
+    const badge = document.createElement('span');
+    badge.className = 'rcx-n';
+    badge.textContent = item.badge;
+    if (panel.batch.includes(+item.badge)) badge.classList.add('rcx-n-picked');
+
+    const body = document.createElement('span');
+    body.className = 'rcx-body';
+    if (item.lede) {
+      const lede = document.createElement('span');
+      lede.className = 'rcx-lede-row';
+      lede.textContent = item.lede;
+      body.appendChild(lede);
+    }
+    const text = document.createElement('span');
+    text.className = 'rcx-text';
+    paintTerms(text, item.row ? item.row.text : (item.sub || ''), terms);
+    body.appendChild(text);
+
+    el.append(badge, body);
+    el.addEventListener('click', (e) => {
+      panel.at = i;
+      if (e.metaKey || e.ctrlKey) return void addToBatch();
+      activate();
+    });
+    el.addEventListener('mousemove', () => {
+      if (panel.at === i) return;
+      panel.at = i;
+      render();
+    });
+    return el;
+  }
+
+  /* The words you typed, lit up in the line they matched. Text nodes and
+   * `<span>`s, never `innerHTML`: what is being shown here is somebody's
+   * reference, and a reference contains markup. */
+  function paintTerms(into, text, terms) {
+    if (!terms.length) { into.textContent = text; return; }
+    const low = text.toLowerCase();
+    const spans = [];
+    for (const term of terms) {
+      for (let at = low.indexOf(term); at >= 0; at = low.indexOf(term, at + term.length)) {
+        spans.push([at, at + term.length]);
+        if (spans.length > 60) break;
+      }
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+    let cursor = 0;
+    for (const [from, to] of spans) {
+      if (from < cursor) continue;
+      if (from > cursor) into.appendChild(document.createTextNode(text.slice(cursor, from)));
+      const hit = document.createElement('b');
+      hit.className = 'rcx-hit';
+      hit.textContent = text.slice(from, to);
+      into.appendChild(hit);
+      cursor = to;
+    }
+    if (cursor < text.length) into.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
+  // ————————————————————————————————————————————————————— the keys
+
+  function onKey(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); return move(1); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); return move(-1); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (panel.mode === 'found') return void confirmLookup();
+      if (panel.mode === 'trouble') return void startLookup(panel.query);
+      if (panel.mode !== 'pick') return;
+      if (e.metaKey || e.ctrlKey) return addToBatch();
+      if (panel.batch.length) return void citeNumbers(panel.batch);
+      return activate();
+    }
+    if (e.key === 'Backspace' && !panel.query && panel.batch.length) {
+      e.preventDefault();
+      panel.batch.pop();
+      render();
+    }
+  }
+
+  function move(dir) {
+    if (!panel.view.length) return;
+    panel.at = (panel.at + dir + panel.view.length) % panel.view.length;
+    render();
+  }
+
+  function activate() {
+    const item = panel.view[panel.at];
+    if (!item) return;
+    if (item.kind === 'lookup') return void startLookup(panel.query);
+    citeNumbers([+item.badge]);
+  }
+
+  /* Several at once. A paragraph resting on three papers is written
+   * `<sup>2,5,9</sup>`, and typing three searches and pressing return three
+   * times would leave three separate markers to merge by hand. Each ⌘⏎ drops
+   * a number in the tray and clears the box for the next search; return cites
+   * the tray, in one marker, in order. */
+  function addToBatch() {
+    const item = panel.view[panel.at];
+    if (!item || item.kind !== 'ref') return;
+    const n = +item.badge;
+    if (!panel.batch.includes(n)) panel.batch.push(n);
+    panel.query = '';
+    panel.el.querySelector('.rcx-q').value = '';
+    recount();
+    render();
+  }
+
+  // —————————————————————————————————————————————————— the two actions
+
+  function citeNumbers(numbers) {
+    const target = panel.target;
+    const out = insertCitation(target, numbers);
+    if (!out.ok) {
+      say('Click in the article text where the citation goes, then press again.', 'trouble');
+      return;
+    }
+    closePanel();
+    say(out.already ? `Already cited there — ${out.marker}`
+        : out.merged ? `Merged into ${out.marker}`
+        : `Cited ${out.marker}`);
+  }
+
+  /* The lookup, in two halves with your say-so in between.
+   *
+   * Nothing is added on the strength of an identifier alone: a mistyped PMID
+   * resolves perfectly well to somebody else's paper, and the only person who
+   * can tell is the one who knows which paper they meant. So the first half
+   * asks and shows, and the second half — one more return — writes. */
+  async function startLookup(query) {
+    const search = tidy(query);
+    if (!search) return;
+    panel.mode = 'asking';
+    panel.query = search;
+    render();
+
+    const cached = citeCached(search);
+    if (cached) return void landed(cached);
+    try {
+      const said = await askCite(search);
+      rememberCite(search, said);
+      landed(said);
+    } catch (err) {
+      if (!panel.el) return;
+      panel.mode = 'trouble';
+      panel.trouble = err.message;
+      render();
+    }
+  }
+
+  function landed(said) {
+    if (!panel.el) return;
+    if (!said.citation || said.error) {
+      panel.mode = 'trouble';
+      panel.trouble = said.error ||
+        'The citation tool found nothing to look up in that — it takes a DOI, PMID, PMCID, ' +
+        'PII, ISBN, a Google Books volume id, or a URL to a paper, a Wikipedia page or any ' +
+        'other website.';
+      render();
+      return;
+    }
+    panel.rows = referenceBoxes();
+    panel.next = nextNumber(panel.rows);
+    panel.mode = 'found';
+    panel.found = said;
+    render();
+  }
+
+  async function confirmLookup() {
+    const said = panel.found;
+    const target = panel.target;
+    if (!said?.citation) return;
+
+    // Read once more, here rather than at "found": a slow lookup gives you
+    // time to add a reference by hand, and the number has to be the one the
+    // list has now.
+    const rows = referenceBoxes();
+    const n = nextNumber(rows);
+    const line = `${n}. ${said.citation}`;
+
+    // On the clipboard before anything is touched. If the box cannot be made,
+    // or the page does something unexpected, the lookup is still in your hands.
+    navigator.clipboard?.writeText(line).catch(() => { /* the box is the point */ });
+
+    panel.mode = 'adding';
+    panel.next = n;
+    render();
+
+    try {
+      await addReference(line);
+    } catch (err) {
+      if (!panel.el) return;
+      panel.mode = 'trouble';
+      panel.trouble = err.message;
+      render();
+      return;
+    }
+
+    const out = insertCitation(target, [n]);
+    closePanel();
+    say(out.ok
+      ? `Reference ${n} added and cited ${out.marker}`
+      : `Reference ${n} added. Click in the text where it belongs and cite it.`,
+      out.ok ? 'good' : 'trouble');
+  }
+
+  /* A line at the bottom of the window, for a second and a half. The panel is
+   * gone by then and the marker is somewhere up in the text, possibly off
+   * screen — this is the receipt. */
+  let toast = null;
+  function say(text, kind) {
+    toast?.remove();
+    const el = document.createElement('div');
+    el.className = `rcx-say ${kind === 'trouble' ? 'rcx-say-trouble' : ''}`;
+    el.textContent = text;
+    document.body.appendChild(el);
+    toast = el;
+    setTimeout(() => { if (toast === el) { el.remove(); toast = null; } }, 4200);
+  }
+
+  // ——————————————————————————————————————————————————— the button
+
+  const LABEL = '[1]';
+  const HINT = 'Cite a reference here (alt-shift-C) — pick one of the article’s references, ' +
+               'or paste a DOI, PMID, PMCID, PII, ISBN, Google Books id or URL to add a new one';
+
+  function mount() {
+    if (!inEditor()) return;
+
+    // Toolbars come and go with the editor; entries whose button is no longer
+    // on the page are entries for an editor that is no longer there.
+    for (let i = editors.length - 1; i >= 0; i--) {
+      if (!editors[i].button?.isConnected) editors.splice(i, 1);
+    }
+
+    for (const spot of toolbarSpots()) {
+      const target = editorFor(spot.bar);
+      if (!target) continue;
+      const button = cloneButton(spot.h3);
+      const entry = { ...target, button, caret: null };
+      spot.h3.insertAdjacentElement('afterend', button);
+      editors.push(entry);
+      watchCaret(entry);
+
+      // Capture, and stopped dead: whatever the editor has bound to its
+      // toolbar, this press is not for it.
+      button.addEventListener('mousedown', (e) => e.preventDefault(), true);
+      button.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (panel.el && panel.button === button) return closePanel();
+        closePanel();
+        button.classList.add('rcx-open');
+        openPanel(entry, button);
+      }, true);
+    }
+  }
+
+  /* H3, cloned and stripped.
+   *
+   * Same tag, same classes, same everything the stylesheet knows about it —
+   * and no attribute the editor could recognise. `data-mce-name`, `id`,
+   * `href`, `aria-*`: all of it goes, on the button and on whatever it is
+   * wrapped around, because that is how a toolbar knows which command a press
+   * belongs to. What is left looks exactly like a toolbar button and does
+   * nothing at all until we bind it. */
+  function cloneButton(h3) {
+    const button = h3.cloneNode(true);
+    strip(button);
+    for (const el of button.querySelectorAll('*')) strip(el);
+
+    const label = innermost(button);
+    label.textContent = LABEL;
+    button.classList.add('rcx-btn');
+    if (button.tagName === 'BUTTON') button.type = 'button';
+    button.setAttribute('role', 'button');
+    button.setAttribute('tabindex', '0');
+    button.setAttribute('title', HINT);
+    button.setAttribute('aria-label', 'Cite a reference');
+    return button;
+  }
+
+  function strip(el) {
+    for (const name of el.getAttributeNames()) {
+      if (name !== 'class' && name !== 'style') el.removeAttribute(name);
+    }
+  }
+
+  /* The element the text actually sits in. A toolbar button is often a span
+   * inside a button inside a div, and writing the label onto the outside of
+   * that would throw the icon markup away along with the padding it carries. */
+  function innermost(el) {
+    let node = el;
+    for (;;) {
+      const kids = [...node.children].filter((c) => tidy(c.textContent));
+      if (kids.length !== 1) return node;
+      node = kids[0];
+    }
+  }
+
+  /* The same thing from the keyboard, and from inside the editor's own iframe
+   * — which is where your hands are when you want it. Alt-shift-C: TinyMCE
+   * keeps alt-shift-1..7 for its headings and this is not one of them. */
+  function shortcut(e) {
+    if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+    if (String(e.key).toLowerCase() !== 'c') return;
+    const here = editors.find((t) => t.doc === e.target?.ownerDocument) || editors[0];
+    if (!here?.button?.isConnected) return;
+    e.preventDefault();
+    if (panel.el) return closePanel();
+    here.button.classList.add('rcx-open');
+    openPanel(here, here.button);
+  }
+
+  // ————————————————————————————————————————————————————— the looks
+
+  /* The panel is Radiopaedia's own furniture, borrowed: a hairline border that
+   * goes darker along the bottom, a 2px corner, Open Sans, and the purple the
+   * site puts on its headings for the one thing that is selected. Only the
+   * numbers are ours — they are the whole subject, so they get a badge and
+   * they get to be the boldest thing in the row.
+   *
+   * The button itself has almost nothing here. It is a clone of H3 and it
+   * keeps H3's stylesheet; what these three lines add is the tint that says
+   * the panel below it is open. */
+  GM_addStyle(`
+    .rcx-btn.rcx-open {
+      background:#5b2d90 !important; color:#fff !important; border-color:transparent !important;
+    }
+    .rcx-btn.rcx-open * { color:#fff !important; }
+
+    .rcx-panel {
+      position:fixed; z-index:99998; width:min(560px, calc(100vw - 16px));
+      display:flex; flex-direction:column; overflow:hidden;
+      background:#fff; border:1px solid rgba(0,0,0,.14);
+      border-bottom-color:rgba(0,0,0,.28); border-radius:3px;
+      box-shadow:0 8px 28px rgba(0,0,0,.18);
+      font-family:"Open Sans", system-ui, -apple-system, sans-serif;
+      font-size:13px; line-height:18px; color:#333;
+    }
+
+    .rcx-head {
+      display:flex; align-items:baseline; gap:8px; padding:7px 8px 7px 10px;
+      background:#f7f7f7; border-bottom:1px solid rgba(0,0,0,.08);
+    }
+    .rcx-lede { font-size:12px; font-weight:600; color:#5b2d90; flex:0 0 auto; }
+    /* Where the marker will land, in the words it will land after. Middle
+       ellipsis rather than a wrap: this line must never make the panel taller. */
+    .rcx-where {
+      flex:1 1 auto; min-width:0; color:#888; font-size:11px;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .rcx-nowhere { color:#b45309; }
+    .rcx-x {
+      flex:0 0 auto; padding:0 4px; border:0; background:transparent;
+      color:#aaa; font-size:15px; line-height:15px; cursor:pointer;
+    }
+    .rcx-x:hover { color:#555; }
+
+    .rcx-q {
+      margin:0; padding:9px 10px; border:0; border-bottom:1px solid rgba(0,0,0,.08);
+      font-family:inherit; font-size:14px; line-height:20px; color:#222;
+      background:#fff; outline:none; width:100%; box-sizing:border-box;
+    }
+    .rcx-q::placeholder { color:#bbb; }
+
+    /* The tray: numbers put by for one marker. */
+    .rcx-batch {
+      display:flex; flex-wrap:wrap; gap:4px; padding:6px 8px 0;
+    }
+    .rcx-batch[hidden] { display:none; }
+    .rcx-chip {
+      padding:1px 6px; border:1px solid rgba(91,45,144,.3); border-radius:2px;
+      background:rgba(91,45,144,.08); color:#5b2d90;
+      font-family:inherit; font-size:11px; font-weight:600; cursor:pointer;
+    }
+    .rcx-chip:hover { background:rgba(91,45,144,.18); }
+
+    .rcx-list { overflow-y:auto; overscroll-behavior:contain; }
+
+    .rcx-row {
+      display:flex; align-items:flex-start; gap:8px; padding:7px 10px;
+      border-bottom:1px solid rgba(0,0,0,.05); cursor:pointer;
+    }
+    .rcx-row:last-child { border-bottom:0; }
+    /* The chosen row, marked down the edge as well as by its wash: on a
+       laptop screen at an angle the wash alone is a guess. */
+    .rcx-on { background:rgba(91,45,144,.07); box-shadow:inset 3px 0 0 #5b2d90; }
+
+    /* The number, which is the entire point of the exercise. */
+    .rcx-n {
+      flex:0 0 auto; min-width:22px; padding:1px 5px; border-radius:2px;
+      background:#eee; color:#555; text-align:center;
+      font-size:12px; font-weight:700; font-variant-numeric:tabular-nums;
+    }
+    .rcx-on .rcx-n { background:#5b2d90; color:#fff; }
+    .rcx-n-picked { background:#5b2d90; color:#fff; }
+    .rcx-row-lookup .rcx-n { background:#0f766e; color:#fff; }
+
+    .rcx-body { flex:1 1 auto; min-width:0; }
+    .rcx-lede-row {
+      display:block; color:#5b2d90; font-size:11px; font-weight:700;
+      text-transform:uppercase; letter-spacing:.04em;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .rcx-row-lookup .rcx-lede-row { color:#0f766e; }
+    /* Two lines of the reference and no more. A reference is eighty words
+       long and the panel is not a reading room — what is here is enough to
+       tell one paper from another, which is all that is being asked. */
+    .rcx-text {
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+      overflow:hidden; color:#444; font-size:12px; line-height:17px;
+    }
+    .rcx-hit { background:#fde68a; font-weight:600; }
+
+    .rcx-note { padding:12px 12px 14px; }
+    .rcx-note-head { font-weight:600; color:#444; }
+    .rcx-note-body { margin-top:3px; color:#777; font-size:12px; }
+    .rcx-trouble .rcx-note-head { color:#b45309; }
+
+    /* What came back, waiting to be agreed to. */
+    .rcx-found { padding:11px 12px 13px; }
+    .rcx-found-head { font-weight:600; color:#222; }
+    .rcx-found-meta { margin-top:2px; color:#0f766e; font-size:11px; font-weight:600; }
+    .rcx-found-body {
+      margin-top:8px; padding:8px; border-radius:2px;
+      background:#fafafa; border:1px solid rgba(0,0,0,.07);
+      color:#444; font-size:12px; line-height:17px;
+    }
+
+    .rcx-foot {
+      padding:6px 10px; border-top:1px solid rgba(0,0,0,.08); background:#fafafa;
+      color:#999; font-size:11px; white-space:nowrap; overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .rcx-odd { color:#b45309; cursor:help; }
+
+    /* The receipt, bottom right, and gone before it is in the way. */
+    .rcx-say {
+      position:fixed; right:16px; bottom:16px; z-index:99999;
+      max-width:min(420px, calc(100vw - 32px));
+      padding:8px 12px; border-radius:3px;
+      background:#5b2d90; color:#fff;
+      box-shadow:0 6px 20px rgba(0,0,0,.22);
+      font-family:"Open Sans", system-ui, -apple-system, sans-serif;
+      font-size:12px; line-height:17px; font-weight:600;
+    }
+    .rcx-say-trouble { background:#b45309; }
+
+    /* The box that has just been filled in, so the eye finds it when the page
+       scrolls down to it. */
+    .rcx-fresh {
+      outline:2px solid #5b2d90 !important;
+      outline-offset:1px;
+      transition:outline-color 1.6s ease-out;
+    }
+  `);
+
+  // ——————————————————————————————————————————————————————— bootstrap
+
+  const keyed = new WeakSet();
+  function listenKeys(doc) {
+    if (keyed.has(doc)) return;
+    keyed.add(doc);
+    doc.addEventListener('keydown', shortcut, true);
+  }
+
+  function wire() {
+    mount();
+    listenKeys(document);
+    for (const t of editors) listenKeys(t.doc);
+  }
+
+  wire();
+
+  /* The editor mounts itself after the page, and Radiopaedia rebuilds parts of
+   * the form as you add and remove references — so the button has to be put
+   * back whenever it goes. Debounced, because this observer sees every
+   * keystroke's worth of DOM the editor makes, and re-reading every button on
+   * the page for each one would be a way to make typing slow. */
+  let settling = null;
+  new MutationObserver(() => {
+    clearTimeout(settling);
+    settling = setTimeout(wire, 250);
+  }).observe(document.body, { childList: true, subtree: true });
+
+  /* One line at startup. If the button is nowhere to be seen, this is the
+   * first thing to look at: no line at all means the script is not running;
+   * a line saying `editors: 0` means it is running and did not find the
+   * toolbar, which is a different problem with a different fix. */
+  console.info('[Radiopaedia Cite] active ·', location.pathname,
+               '· editor page:', inEditor(),
+               '· editors:', editors.length,
+               '· references:', inEditor() ? referenceBoxes().length : 0);
+})();
