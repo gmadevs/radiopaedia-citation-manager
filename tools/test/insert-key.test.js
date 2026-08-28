@@ -6,6 +6,8 @@ const h = require('./harness.js');
 require('./insert.cases.js')(h);
 
 h.is('the shortcut was actually pressed', h.window.__keys.length > 0, true);
-h.is('and the superscript command was asked first, and refused',
-     h.window.__commands.includes('superscript'), true);
+/* And it was enough on its own: the shortcut goes first now, so the browser's
+ * command — the one this editor refuses — is never reached. */
+h.is('and the browser\'s command was never needed',
+     h.window.__commands.includes('superscript'), false);
 h.done();

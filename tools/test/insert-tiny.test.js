@@ -6,6 +6,6 @@ require('./insert.cases.js')(h);
 
 h.is('the marker went in through the editor\'s own insert',
      h.window.__mce.includes('mceInsertContent'), true);
-h.is('and the browser was not asked to type it as well',
-     h.window.__commands.includes('insertText'), false);
+h.is('and the browser was never asked to raise anything',
+     h.window.__commands.includes('superscript'), false);
 h.done();

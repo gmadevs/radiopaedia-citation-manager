@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.4
+// @version      1.5.5
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -811,8 +811,9 @@
         settle(target, near);
         return { ok: true, marker: merged, merged: true, already: true };
       }
-      near.textContent = merged;
-      settle(target, near);
+      const wrote = rewrite(target, near, merged);
+      noted(target, merged, { node: wrote, wrote: true, raised: !!wrote, how: 'merge' });
+      settle(target, wrote || near);
       return { ok: true, marker: merged, merged: true };
     }
 
@@ -871,6 +872,16 @@
           : raisedFrom(target, el) ? 'raised'
           : 'flat';
         if (block) lastPut.markupAfter = tidy(block.innerHTML).slice(0, 300);
+
+        /* And said out loud, because this is the failure nobody sees happen.
+         * The panel has closed by now and the marker is on screen at full
+         * size, looking like something you typed wrong rather than something
+         * the editor undid. */
+        if (lastPut.after !== 'raised') {
+          console.warn('[Radiopaedia Cite] the marker went in and this editor took the ' +
+                       `superscript back out — ${lastPut.marker} is in the article at full ` +
+                       'size. radiopaediaCite.look() has the detail.');
+        }
       } catch { /* the page has moved on, and so has the question */ }
     }, 500);
   }
@@ -880,6 +891,44 @@
       try { return !!doc[what]?.('superscript'); } catch { return null; }
     };
     return { supported: ask('queryCommandSupported'), enabled: ask('queryCommandEnabled') };
+  }
+
+  /* Rewriting a marker that is already there — `<sup>2</sup>` and 3 becoming
+   * `<sup>2,3</sup>`.
+   *
+   * `textContent = merged` is the obvious way and it is the wrong way for the
+   * same reason the tag was: an editor with its own model of the document does
+   * not see an assignment, and the next thing it renders puts the old number
+   * back. Typing it is what a person would do — select what is in the marker,
+   * type the new list — and typing is the one thing every editor is listening
+   * for. The mark comes along with it, because the selection is inside it.
+   *
+   * The assignment is still here behind that, for a plain contenteditable with
+   * nothing watching it, and for the tests. */
+  function rewrite(target, sup, text) {
+    const doc = target.doc;
+    const sel = doc.getSelection?.();
+    try {
+      if (sel && typeof doc.execCommand === 'function') {
+        const over = doc.createRange();
+        over.selectNodeContents(sup);
+        target.root.focus?.();
+        sel.removeAllRanges();
+        sel.addRange(over);
+        if (doc.execCommand('insertText', false, text)) {
+          /* Read back which marker now holds it: the editor may have rebuilt
+           * the paragraph around the typing, in which case the `<sup>` that
+           * was passed in is a node nobody is looking at any more. */
+          const up = raisedNear(target, sel);
+          if (up && fold(up.textContent) === text) return up;
+          if (target.root.contains(sup) && fold(sup.textContent) === text) return sup;
+        }
+      }
+    } catch { /* fall through to the assignment */ }
+
+    if (!target.root.contains(sup)) return null;
+    sup.textContent = text;
+    return sup;
   }
 
   /* Writing a NEW marker, in the editor's own words where it has any.
@@ -1022,40 +1071,41 @@
       if (!over) return { node: node || null, wrote: true, raised: false, how: 'command' };
       sel.removeAllRanges();
       sel.addRange(over);
-      doc.execCommand('superscript');
 
-      /* Did it take?
+      /* The number is written and selected. Now raise it, in three tries, and
+       * in this order for a reason worth writing down.
        *
-       * `superscript` is not a command every editor carries, and one that
-       * carries it may still hand the selection back unraised — a command
-       * refused on a collapsed-looking selection, a whitelist run over the
-       * document the moment something changes it. What is left then is the
-       * number sitting in the running text at full size: the failure that
-       * looks like it worked, because the marker is right there and only its
-       * size is wrong. So the answer is checked rather than assumed, and when
-       * it is no, the tag goes in by hand over exactly what was written. */
-      let how = 'command';
-      let up = raisedNear(target, sel);
+       * The shortcut goes first — ⌘. on a Mac, ctrl-. everywhere else, the
+       * same keys a person would press. On an editor that keeps its own model
+       * of the document, that is not merely the tidiest way, it is the only
+       * one that lasts: the other two change the DOM, and a change to the DOM
+       * that the editor did not make is not in its model, so the next time it
+       * renders, the tag is gone and the number is left in the running text at
+       * full size.
+       *
+       * That failure cannot be caught by looking straight afterwards — the tag
+       * is genuinely there for a moment — which is why the order matters more
+       * than the checking does. Ask the editor first; fall back only where
+       * there is no editor to ask, and where nothing will be undoing us. */
+      let how = null;
+      let up = null;
 
-      /* Then the way a person does it: the editor's own shortcut, pressed on
-       * the number while it is selected — ⌘. on a Mac, ctrl-. everywhere else.
-       * It is the same instruction the trouble message gives when everything
-       * else has failed ("select the number and press x¹"), and where the
-       * editor listens for it in JavaScript what comes out is the editor's own
-       * markup, which is the one thing this script cannot get wrong by
-       * imitating. Where it does not listen, nothing happens and nothing is
-       * broken: a synthetic key press is not a real one, and an editor that
-       * leaves the shortcut to the browser will not hear it. */
-      if (!up && pressRaise(target)) {
-        up = raisedFrom(target, over.startContainer) || raisedNear(target, sel);
+      if (pressRaise(target)) {
+        up = raisedNear(target, sel) || raisedFrom(target, over.startContainer);
         if (up) how = 'shortcut';
+      }
+
+      if (!up) {
+        doc.execCommand('superscript');
+        up = raisedNear(target, sel);
+        if (up) how = 'command';
       }
 
       if (!up) {
         up = raiseRange(target, over, text);
         if (up) how = 'hand';
       }
-      return { node: up || node, wrote: true, raised: !!up, how };
+      return { node: up || node, wrote: true, raised: !!up, how: how || 'flat' };
     } catch {
       // Half-written is still written: falling through to the DOM here would
       // put the number in twice.
@@ -1136,6 +1186,7 @@
    * right and saves wrong. */
   function raiseRange(target, over, text) {
     try {
+      if (!target.root.contains(over.startContainer)) return null;
       const inside = raisedFrom(target, over.startContainer);
       if (inside) return inside;
       if (over.toString() !== text) return null;
@@ -1157,7 +1208,7 @@
   }
 
   function raisedFrom(target, start) {
-    if (!start) return null;
+    if (!start || !target.root.contains(start)) return null;
     let el = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
     const view = target.doc.defaultView;
     while (el && el !== target.root) {

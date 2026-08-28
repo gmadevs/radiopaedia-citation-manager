@@ -64,8 +64,10 @@ window.GM_addStyle = () => {};
  * through that, and expects the same markup out. */
 if (!process.env.NOCMD) {
   window.__commands = [];
+  window.__typed = [];
   doc.execCommand = function (command, ui, value) {
     window.__commands.push(command);
+    if (command === 'insertText') window.__typed.push(String(value));
     const sel = doc.getSelection();
     if (!sel.rangeCount) return false;
     const range = sel.getRangeAt(0);
