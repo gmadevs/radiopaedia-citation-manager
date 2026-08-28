@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.1
+// @version      1.5.2
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -819,9 +819,40 @@
     const at = (HOP_PUNCTUATION && hopPunctuation(range)) || range;
     const text = markerText(numbers);
     const put = raiseHere(target, at, text, wantsSpace(at));
-    if (!put?.node) return { ok: false, why: 'insert' };
-    settle(target, put.node);
+    noted(target, text, put);
+    if (!put?.node && !put?.wrote) return { ok: false, why: 'insert' };
+    if (put.node) settle(target, put.node); else stirred(target);
     return { ok: true, marker: text, merged: false, raised: put.raised };
+  }
+
+  /* What the last marker did on its way in.
+   *
+   * Nothing reads this to decide anything; it is written down for
+   * `radiopaediaCite.look()`, because "the number went in at full size" is a
+   * sentence about an editor on somebody else's machine, and the only way to
+   * answer it from here is to have the script say which door it went through
+   * and what the paragraph looked like afterwards. */
+  let lastPut = null;
+
+  function noted(target, text, put) {
+    try {
+      const block = put?.node ? blockOf(put.node, target.root) : null;
+      lastPut = {
+        marker: text,
+        through: put?.how || 'nothing',
+        raised: put?.raised ?? null,
+        tinymce: !!editorFor(target),
+        superscript: canRaise(target.doc),
+        markup: block ? tidy(block.innerHTML).slice(0, 300) : null,
+      };
+    } catch { lastPut = { marker: text, through: put?.how || 'nothing', broke: true }; }
+  }
+
+  function canRaise(doc) {
+    const ask = (what) => {
+      try { return !!doc[what]?.('superscript'); } catch { return null; }
+    };
+    return { supported: ask('queryCommandSupported'), enabled: ask('queryCommandEnabled') };
   }
 
   /* Writing a NEW marker, in the editor's own words where it has any.
@@ -837,7 +868,89 @@
    * The DOM is the fallback, for a plain contenteditable with no editor around
    * it — and for the tests, where there is no `execCommand` to call. */
   function raiseHere(target, at, text, spaced) {
-    return byCommand(target, at, text, spaced) || byNode(target, at, text, spaced);
+    return byEditor(target, at, text, spaced)
+        || byCommand(target, at, text, spaced)
+        || byNode(target, at, text, spaced);
+  }
+
+  /* First choice, where the editor has a front door: TinyMCE's own insert.
+   *
+   * This is the one that answers the failure this script kept hitting. TinyMCE
+   * keeps a schema and runs it over its document, and it has opinions about
+   * changes it did not make: a `<sup>` put in through the DOM can be tidied
+   * straight back out, and `execCommand('superscript')` — a browser command,
+   * issued behind the editor's back — can be declined outright, which leaves
+   * the number sitting in the running text at full size.
+   *
+   * `mceInsertContent` is the same marker put in through the front door. It is
+   * what the editor's own buttons call, so the markup goes through the
+   * sanitiser as something the editor itself asked for, and lands on the undo
+   * stack where ctrl-Z can find it.
+   *
+   * The id is how the `<sup>` is found again afterwards — TinyMCE decides
+   * where the caret ends up, and reading the answer back beats assuming it —
+   * and it is taken off again the moment it has been used, so nothing of this
+   * script's is left in the article. */
+  const PUT_ID = 'rcx-just-put';
+
+  function byEditor(target, at, text, spaced) {
+    const ed = editorFor(target);
+    if (!ed?.selection?.setRng || typeof ed.execCommand !== 'function') return null;
+
+    const doc = target.doc;
+    let gap = null;
+    try {
+      /* The space by hand here too: a leading space inside the inserted HTML
+       * comes back as an `&nbsp;`, and an `&nbsp;` in a saved article is a
+       * thing somebody has to come and take out again. */
+      let from = at;
+      if (spaced) {
+        gap = doc.createTextNode(' ');
+        at.insertNode(gap);
+        from = doc.createRange();
+        from.setStartAfter(gap);
+        from.collapse(true);
+      }
+
+      target.root.focus?.();
+      ed.selection.setRng(from);
+      /* Only an outright no is taken for a no: TinyMCE answers true when it
+       * has handled a command, and a version that answers nothing at all has
+       * still handled it. Reading `undefined` as a refusal would send the
+       * number down the next path and put it in the article twice. */
+      const said = ed.execCommand('mceInsertContent', false, `<sup id="${PUT_ID}">${text}</sup>`);
+      if (said === false) {
+        unwrite(gap);
+        return null;
+      }
+
+      const rng = ed.selection.getRng?.();
+      const put = doc.getElementById(PUT_ID)
+        || (rng && (raisedFrom(target, rng.startContainer) || sideNode(rng, -1)));
+      if (put?.id === PUT_ID) put.removeAttribute('id');
+
+      /* The content is in either way — asking for it again down the other
+       * paths would put the number in twice — so `wrote` is the answer even
+       * when the node cannot be pointed at, and `raised` is read from what is
+       * actually there rather than from what was asked for. */
+      const node = put?.tagName === 'SUP' && fold(put.textContent) === text ? put : null;
+      return { node, wrote: true, raised: !!node, how: 'editor' };
+    } catch {
+      unwrite(gap);
+      return null;
+    }
+  }
+
+  /* The TinyMCE editor this field belongs to, if the page has one at all. */
+  function editorFor(target) {
+    try {
+      const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      for (const ed of page.tinymce?.editors || []) {
+        const body = ed.getBody?.();
+        if (body === target.root || body?.contains?.(target.root)) return ed;
+      }
+    } catch { /* no TinyMCE, or a version that keeps its editors elsewhere */ }
+    return null;
   }
 
   function byCommand(target, at, text, spaced) {
@@ -879,7 +992,7 @@
       const caret = sel.rangeCount ? sel.getRangeAt(0) : null;
       const node = caret?.startContainer;
       const over = writtenRange(doc, caret, text);
-      if (!over) return { node: node || null, raised: false };
+      if (!over) return { node: node || null, wrote: true, raised: false, how: 'command' };
       sel.removeAllRanges();
       sel.addRange(over);
       doc.execCommand('superscript');
@@ -895,11 +1008,11 @@
        * size is wrong. So the answer is checked rather than assumed, and when
        * it is no, the tag goes in by hand over exactly what was written. */
       const up = raisedNear(target, sel) || raiseRange(target, over, text);
-      return { node: up || node, raised: !!up };
+      return { node: up || node, wrote: true, raised: !!up, how: 'command' };
     } catch {
       // Half-written is still written: falling through to the DOM here would
       // put the number in twice.
-      if (wrote) return { node: null, raised: false };
+      if (wrote) return { node: null, wrote: true, raised: false, how: 'command' };
       unwrite(gap);
       return null;
     }
@@ -985,7 +1098,7 @@
     sup.textContent = text;
     at.insertNode(sup);
     if (spaced) sup.parentNode.insertBefore(doc.createTextNode(' '), sup);
-    return { node: sup, raised: true };
+    return { node: sup, wrote: true, raised: true, how: 'dom' };
   }
 
   /* A `<sup>` the caret is in, or immediately beside, with nothing but space
@@ -1141,15 +1254,11 @@
     } catch { /* older engines: the editor will read the DOM at save time */ }
 
     try {
-      const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-      for (const ed of page.tinymce?.editors || []) {
-        const body = ed.getBody?.();
-        if (body !== target.root && !(body && body.contains(target.root))) continue;
-        ed.undoManager?.add?.();
-        ed.setDirty?.(true);
-        ed.nodeChanged?.();
-      }
-    } catch { /* no TinyMCE, or a version that keeps its editors elsewhere */ }
+      const ed = editorFor(target);
+      ed?.undoManager?.add?.();
+      ed?.setDirty?.(true);
+      ed?.nodeChanged?.();
+    } catch { /* an editor mid-teardown */ }
   }
 
   /* Typing something at the caret, and nothing more: no marker, no space, no
@@ -2471,13 +2580,21 @@
    * first thing to look at: no line at all means the script is not running;
    * a line saying `editors: 0` means it is running and did not find the
    * toolbar, which is a different problem with a different fix. */
-  console.info('[Radiopaedia Cite] active ·', location.pathname,
+  console.info('[Radiopaedia Cite]', running(), 'active ·', location.pathname,
                '· editor page:', inEditor(),
                '· editable fields:', editableWithin(document).length,
                '· buttons:', editors.length
                  ? editors.map((e) => e.how).join(', ')
                  : 'NONE',
                '· references:', inEditor() ? referenceBoxes().length : 0);
+
+  /* Which version is actually installed, which is the first thing to know
+   * when a fix has been released and the trouble has not gone away: the
+   * manager updates on its own schedule, and the file on somebody's disk is
+   * not the file in their browser. */
+  function running() {
+    try { return 'v' + (GM_info?.script?.version || '?'); } catch { return 'v?'; }
+  }
 
   /* And something to ask, when that line is not enough.
    *
@@ -2492,8 +2609,11 @@
       look() {
         const fields = editableWithin(document);
         const report = {
+          version: running(),
           url: location.href,
           editorPage: inEditor(),
+          tinymce: !!(typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).tinymce,
+          lastMarker: lastPut,
           editableFields: fields.length,
           buttons: editors.map((e) => e.how),
           references: referenceBoxes().length,

@@ -94,6 +94,47 @@ if (!process.env.NOCMD) {
     return false;
   };
 }
+/* `TINY=1` is the page with a real editor on it: TinyMCE, whose own
+ * `mceInsertContent` is the front door the script knocks on first. What it
+ * models is the thing that matters — the editor decides where the caret ends
+ * up afterwards, so the marker has to be found again rather than assumed. */
+if (process.env.TINY) {
+  window.__mce = [];
+  window.tinymce = {
+    editors: [{
+      getBody: () => doc.getElementById('body'),
+      selection: {
+        setRng(r) { const sel = doc.getSelection(); sel.removeAllRanges(); sel.addRange(r); },
+        getRng() { const sel = doc.getSelection(); return sel.rangeCount ? sel.getRangeAt(0) : null; },
+      },
+      execCommand(command, ui, value) {
+        window.__mce.push(command);
+        if (command !== 'mceInsertContent') return false;
+        const sel = doc.getSelection();
+        if (!sel.rangeCount) return false;
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const holder = doc.createElement('div');
+        holder.innerHTML = String(value);
+        const frag = doc.createDocumentFragment();
+        let last = null;
+        while (holder.firstChild) { last = holder.firstChild; frag.appendChild(last); }
+        range.insertNode(frag);
+        // Where TinyMCE leaves the caret is its own business — after the
+        // insertion, and in the block rather than in the marker.
+        const after = doc.createRange();
+        after.setStartAfter(last);
+        after.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(after);
+        return true;
+      },
+      undoManager: { add() {} },
+      setDirty() {},
+      nodeChanged() {},
+    }],
+  };
+}
 window.unsafeWindow = window;
 window.__asked = [];
 window.GM_xmlhttpRequest = ({ url, onload }) => {
