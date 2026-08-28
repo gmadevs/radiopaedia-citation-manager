@@ -135,6 +135,27 @@ if (process.env.TINY) {
     }],
   };
 }
+/* `KEY=1` is the editor that raises a superscript only when it is asked for
+ * the way a person asks — ⌘. on a Mac, ctrl-. elsewhere — and by no other
+ * means. Run with `NOSUP=1` it is the whole point of the shortcut: the
+ * browser's command is refused, and the marker still comes out raised. */
+if (process.env.KEY) {
+  window.__keys = [];
+  doc.addEventListener('keydown', (e) => {
+    if (e.key !== '.' || !(e.metaKey || e.ctrlKey)) return;
+    window.__keys.push(e.metaKey ? 'meta.' : 'ctrl.');
+    const sel = doc.getSelection();
+    if (!sel.rangeCount || sel.getRangeAt(0).collapsed) return;
+    const range = sel.getRangeAt(0);
+    const sup = doc.createElement('sup');
+    sup.appendChild(range.extractContents());
+    range.insertNode(sup);
+    const over = doc.createRange();
+    over.selectNodeContents(sup);
+    sel.removeAllRanges();
+    sel.addRange(over);
+  });
+}
 window.unsafeWindow = window;
 window.__asked = [];
 window.GM_xmlhttpRequest = ({ url, onload }) => {

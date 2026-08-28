@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.2
+// @version      1.5.3
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -1007,8 +1007,28 @@
        * looks like it worked, because the marker is right there and only its
        * size is wrong. So the answer is checked rather than assumed, and when
        * it is no, the tag goes in by hand over exactly what was written. */
-      const up = raisedNear(target, sel) || raiseRange(target, over, text);
-      return { node: up || node, wrote: true, raised: !!up, how: 'command' };
+      let how = 'command';
+      let up = raisedNear(target, sel);
+
+      /* Then the way a person does it: the editor's own shortcut, pressed on
+       * the number while it is selected — ⌘. on a Mac, ctrl-. everywhere else.
+       * It is the same instruction the trouble message gives when everything
+       * else has failed ("select the number and press x¹"), and where the
+       * editor listens for it in JavaScript what comes out is the editor's own
+       * markup, which is the one thing this script cannot get wrong by
+       * imitating. Where it does not listen, nothing happens and nothing is
+       * broken: a synthetic key press is not a real one, and an editor that
+       * leaves the shortcut to the browser will not hear it. */
+      if (!up && pressRaise(target)) {
+        up = raisedFrom(target, over.startContainer) || raisedNear(target, sel);
+        if (up) how = 'shortcut';
+      }
+
+      if (!up) {
+        up = raiseRange(target, over, text);
+        if (up) how = 'hand';
+      }
+      return { node: up || node, wrote: true, raised: !!up, how };
     } catch {
       // Half-written is still written: falling through to the DOM here would
       // put the number in twice.
@@ -1048,7 +1068,38 @@
     return over;
   }
 
-  /* Raising a range by hand, when the command would not.
+  /* The superscript shortcut, pressed as a person would press it.
+   *
+   * ⌘. on a Mac and ctrl-. elsewhere: the same key, and the same handler
+   * behind it, on every editor that carries the shortcut at all. It goes to
+   * whatever inside the field has the focus, because that is where a real key
+   * press would land. */
+  function pressRaise(target) {
+    const doc = target.doc;
+    const view = doc.defaultView || window;
+    if (typeof view.KeyboardEvent !== 'function') return false;
+
+    const nav = view.navigator || {};
+    const mac = /Mac|iPhone|iPad|iPod/.test(nav.platform || nav.userAgent || '');
+    const press = {
+      key: '.', code: 'Period', keyCode: 190, which: 190,
+      bubbles: true, cancelable: true, composed: true,
+      ...(mac ? { metaKey: true } : { ctrlKey: true }),
+    };
+
+    const focused = doc.activeElement;
+    const el = focused && target.root.contains(focused) ? focused : target.root;
+    try {
+      for (const kind of ['keydown', 'keypress', 'keyup']) {
+        el.dispatchEvent(new view.KeyboardEvent(kind, press));
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /* Raising a range by hand, when neither would.
    *
    * Two things are checked before the tag goes in. That the range still holds
    * the marker and nothing else, because wrapping the wrong characters is
