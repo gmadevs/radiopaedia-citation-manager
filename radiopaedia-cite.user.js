@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.0
+// @version      1.5.1
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -846,6 +846,7 @@
     if (!sel || typeof doc.execCommand !== 'function') return null;
 
     let wrote = false;
+    let gap = null;
     try {
       /* The space goes in by hand even here. `insertText` with a space at the
        * end of a run gives a non-breaking one in most engines, and an `&nbsp;`
@@ -853,7 +854,7 @@
        * again. A bare space is beneath the notice of any sanitiser. */
       let from = at;
       if (spaced) {
-        const gap = doc.createTextNode(' ');
+        gap = doc.createTextNode(' ');
         at.insertNode(gap);
         from = doc.createRange();
         from.setStartAfter(gap);
@@ -865,29 +866,93 @@
       target.root.focus?.();
       sel.removeAllRanges();
       sel.addRange(from);
-      if (!doc.execCommand('insertText', false, text)) return wrote ? null : null;
+      if (!doc.execCommand('insertText', false, text)) {
+        // Nothing was typed, so the space that was made ready for it comes
+        // out again: the DOM is about to put in its own.
+        unwrite(gap);
+        return null;
+      }
       wrote = true;
 
       /* Select what was just typed — the caret is sitting at the end of it —
        * and raise it the way the toolbar would. */
       const caret = sel.rangeCount ? sel.getRangeAt(0) : null;
       const node = caret?.startContainer;
-      if (!node || node.nodeType !== Node.TEXT_NODE || caret.startOffset < text.length) {
-        return { node: node || null, raised: false };
-      }
-      const over = doc.createRange();
-      over.setStart(node, caret.startOffset - text.length);
-      over.setEnd(node, caret.startOffset);
+      const over = writtenRange(doc, caret, text);
+      if (!over) return { node: node || null, raised: false };
       sel.removeAllRanges();
       sel.addRange(over);
       doc.execCommand('superscript');
 
-      const up = raisedNear(target, sel);
+      /* Did it take?
+       *
+       * `superscript` is not a command every editor carries, and one that
+       * carries it may still hand the selection back unraised — a command
+       * refused on a collapsed-looking selection, a whitelist run over the
+       * document the moment something changes it. What is left then is the
+       * number sitting in the running text at full size: the failure that
+       * looks like it worked, because the marker is right there and only its
+       * size is wrong. So the answer is checked rather than assumed, and when
+       * it is no, the tag goes in by hand over exactly what was written. */
+      const up = raisedNear(target, sel) || raiseRange(target, over, text);
       return { node: up || node, raised: !!up };
     } catch {
       // Half-written is still written: falling through to the DOM here would
       // put the number in twice.
-      return wrote ? { node: null, raised: false } : null;
+      if (wrote) return { node: null, raised: false };
+      unwrite(gap);
+      return null;
+    }
+  }
+
+  function unwrite(node) {
+    try { node?.parentNode?.removeChild(node); } catch { /* already gone */ }
+  }
+
+  /* The range over what `insertText` has just written.
+   *
+   * The caret is at the end of it, so the marker is the last `text.length`
+   * characters in front of the caret — but WHERE the caret is reported is the
+   * engine's business. Chrome leaves it inside the text node it typed into;
+   * an editor that tidies the document on `input` can leave it on the element,
+   * at the boundary between two children. Both are answered here, and the
+   * characters are read back before they are used, so that nothing else is
+   * ever the thing that gets raised. */
+  function writtenRange(doc, caret, text) {
+    let node = caret?.startContainer;
+    let at = caret?.startOffset ?? 0;
+    if (node?.nodeType === Node.ELEMENT_NODE) {
+      const before = node.childNodes[at - 1];
+      if (before?.nodeType !== Node.TEXT_NODE) return null;
+      node = before;
+      at = node.data.length;
+    }
+    if (node?.nodeType !== Node.TEXT_NODE) return null;
+    if (at < text.length || node.data.slice(at - text.length, at) !== text) return null;
+    const over = doc.createRange();
+    over.setStart(node, at - text.length);
+    over.setEnd(node, at);
+    return over;
+  }
+
+  /* Raising a range by hand, when the command would not.
+   *
+   * Two things are checked before the tag goes in. That the range still holds
+   * the marker and nothing else, because wrapping the wrong characters is
+   * worse than leaving them flat. And that nothing has raised them already:
+   * an editor that did the work in markup this script cannot recognise has
+   * still done it, and a second `<sup>` around the first is markup that reads
+   * right and saves wrong. */
+  function raiseRange(target, over, text) {
+    try {
+      const inside = raisedFrom(target, over.startContainer);
+      if (inside) return inside;
+      if (over.toString() !== text) return null;
+      const sup = target.doc.createElement('sup');
+      over.surroundContents(sup);
+      return sup;
+    } catch {
+      return null;
     }
   }
 
@@ -897,7 +962,11 @@
    * and there is nothing to be gained by calling that a failure. */
   function raisedNear(target, sel) {
     if (!sel.rangeCount) return null;
-    const start = sel.getRangeAt(0).startContainer;
+    return raisedFrom(target, sel.getRangeAt(0).startContainer);
+  }
+
+  function raisedFrom(target, start) {
+    if (!start) return null;
     let el = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
     const view = target.doc.defaultView;
     while (el && el !== target.root) {

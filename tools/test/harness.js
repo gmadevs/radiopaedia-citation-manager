@@ -56,7 +56,12 @@ window.GM_addStyle = () => {};
  * the editor's own commands — so a small honest one is provided here, and
  * `NOCMD=1` takes it away again to exercise the DOM fallback instead. Both
  * paths are tested: insert.test.js runs the cases through this, and
- * insert-dom.test.js runs the same cases with it gone. */
+ * insert-dom.test.js runs the same cases with it gone.
+ *
+ * `NOSUP=1` is the third editor, and the nastiest one: it types what it is
+ * asked to type and then refuses to raise it, which is how a marker ends up
+ * in the article at full size. insert-flat.test.js runs the same cases
+ * through that, and expects the same markup out. */
 if (!process.env.NOCMD) {
   window.__commands = [];
   doc.execCommand = function (command, ui, value) {
@@ -76,6 +81,7 @@ if (!process.env.NOCMD) {
       return true;
     }
     if (command === 'superscript') {
+      if (process.env.NOSUP) return false;
       const sup = doc.createElement('sup');
       sup.appendChild(range.extractContents());
       range.insertNode(sup);
