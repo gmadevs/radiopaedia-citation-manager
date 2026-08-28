@@ -73,6 +73,14 @@
  *
  * What it writes, and what it does not
  * ------------------------------------
+ * The marker is asked for the way a person would ask for it — the editor's own
+ * insert where there is one, otherwise the number typed and then ⌘. (ctrl-.
+ * away from a Mac) pressed on it. Not for tidiness: an editor that keeps its
+ * own model of the document renders the page from that model, and a `<sup>`
+ * that never went through it is gone at the next render, leaving the number in
+ * the running text at full size. Typing survives; markup written behind the
+ * editor's back does not. `raiseHere` has the order and the reasons.
+ *
  * Two places, both of them yours to undo: the `<sup>` in the editor, and a new
  * box in the reference list with `N. …` in it. Nothing is saved — the form is
  * still sitting there unsubmitted, and every marker can be selected and

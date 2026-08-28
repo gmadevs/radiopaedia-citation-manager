@@ -241,14 +241,28 @@ commit to one.
 
 ## What it writes, and what it does not
 
-The marker is written **with the editor's own commands** — `insertText`, then `superscript`, which
-is precisely what pressing `x¹` runs. So what lands in the article is the markup *this* editor makes
-for a superscript, and markup it will not turn round and undo: an editor that keeps a whitelist and
-runs it over its own document whenever something changes it will quietly unwrap a `<sup>` that was
-put there behind its back, leaving the number in the text at full size — the one failure that looks
-like it worked. Where there is no `execCommand` to call, the node goes in by hand instead. (The
-space in front is always written by hand: `insertText` with a space gives a non-breaking one in most
-engines, and an `&nbsp;` in the saved article is something somebody has to come and take out again.)
+The marker is asked for **the way you would ask for it yourself**, and that is not a matter of
+tidiness. Editors of the current sort keep their own model of the document and render the page from
+it; a `<sup>` that appears in the DOM without going through that model is not in it, and the next
+time the editor renders, the tag is gone and the number is left in the running text at full size —
+the failure that looks like it worked, because the marker is right there and only its size is
+wrong. Typed text survives, because typing is the one thing every editor is listening for.
+
+So, in order, and stopping at the first that works:
+
+| | |
+|---|---|
+| the editor's own insert | `mceInsertContent`, where the page runs TinyMCE: the marker goes through its schema as something the editor itself did, and lands on its undo stack |
+| the number, typed | `insertText`, and then **⌘.** — ctrl-. away from a Mac — pressed on it while it is selected, which is the shortcut the editor binds for a superscript |
+| the browser's command | `superscript`, for a plain contenteditable with nothing watching it |
+| the tag, by hand | a `<sup>` around exactly the characters that were written, when nothing else would raise them |
+
+Joining a number into a marker that is already there is typed too, for the same reason: the marker's
+contents are selected and the new list is typed over them, so the superscript comes along with it.
+
+(The space in front is always written by hand, on every one of those paths: `insertText` with a
+space gives a non-breaking one in most engines, and an `&nbsp;` in the saved article is something
+somebody has to come and take out again.)
 
 Two places, both of them yours to undo:
 
@@ -310,9 +324,13 @@ in strokes that owe the stylesheet nothing.
 **No button.** Open the console: the script prints one line on every edit page it runs on.
 
 ```
-[Radiopaedia Cite] active · /articles/…/edit · editor page: true · editable fields: 1
+[Radiopaedia Cite] v1.5.5 active · /articles/…/edit · editor page: true · editable fields: 1
                   · buttons: beside H3 · references: 11
 ```
+
+The version is on that line because a fix nobody is running looks exactly like a fix that does not
+work — userscript managers check for updates on their own schedule, and the file on your disk is not
+the file in your browser.
 
 No line at all means the script is not running — check it is enabled and that the page is under
 `radiopaedia.org`. `editable fields: 0` means it is running and cannot see the editor at all.
@@ -325,9 +343,16 @@ For anything else, ask the page directly:
 radiopaediaCite.look()
 ```
 
-It prints what the script can see — the fields, what it took for a toolbar, what the controls in
-that toolbar are called, and which one it decided to stand beside. It reads and returns; it changes
-nothing. That output is what an issue about a missing button should carry.
+It prints what the script can see — the version, the fields, what it took for a toolbar, what the
+controls in that toolbar are called, and which one it decided to stand beside. It reads and returns;
+it changes nothing. That output is what an issue about a missing button should carry.
+
+It also carries `lastMarker`, which is the last marker's account of itself: `through` says which of
+the paths above wrote it (or `merge`, for a number joined into a marker already there), `raised` says whether it went in raised, and **`after`** says what
+had become of it half a second later — `raised`, `flat`, or `gone` from the document altogether.
+That last one is the whole difference between an editor that would not raise the number and an
+editor that raised it and then took the tag back out, which look identical on screen and want
+opposite fixes.
 
 **"click in the text first".** The panel needs to know where the marker goes, and it takes that from
 the last place the caret was inside the article text. Click in the text, then press the button.
@@ -338,6 +363,13 @@ the last place the caret was inside the article text. Click in the text, then pr
 **The number went in but it is not raised.** The toast says so when it happens: the editor accepted
 the text and refused the superscript. Select the number and press `x¹` — and please open an issue
 with the output of `radiopaediaCite.look()`, because that is a case worth handling.
+
+**The number went in raised and came back at full size.** The console says so when it happens, half
+a second after the fact, because by then the panel has closed and the marker on screen looks like
+something you typed wrong rather than something the editor undid. It means the editor rebuilt the
+paragraph from its own model and the tag was not in it. `radiopaediaCite.look().lastMarker` will
+show `after: "gone"` or `after: "flat"`; the issue worth opening carries that, and what the page is
+running its editor on.
 
 **The reference box did not appear.** The citation is on the clipboard — add the box with
 Radiopaedia's own button and paste it in. The marker is not inserted in that case; cite it once the
