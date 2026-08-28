@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.3
+// @version      1.5.4
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -845,7 +845,34 @@
         superscript: canRaise(target.doc),
         markup: block ? tidy(block.innerHTML).slice(0, 300) : null,
       };
+      lookAgain(target, put?.node, block);
     } catch { lastPut = { marker: text, through: put?.how || 'nothing', broke: true }; }
+  }
+
+  /* And again a moment later.
+   *
+   * What the markup says at the instant the marker goes in is not the whole
+   * story, and on some editors it is not even the interesting half: an editor
+   * that reads its document after every change can take back out what it did
+   * not put in, which leaves a `<sup>` that was there when it was checked and
+   * a number at full size by the time anybody looks. Those two failures are
+   * indistinguishable on screen and want opposite fixes, so the second look is
+   * written down beside the first: `raised` is what went in, `after` is what
+   * survived — raised, flat, or gone from the document altogether.
+   *
+   * Nothing is repaired here. This reads, and says what it saw. */
+  function lookAgain(target, el, block) {
+    const view = target.doc.defaultView;
+    if (!el || typeof view?.setTimeout !== 'function') return;
+    view.setTimeout(() => {
+      try {
+        if (!lastPut) return;
+        lastPut.after = !target.root.contains(el) ? 'gone'
+          : raisedFrom(target, el) ? 'raised'
+          : 'flat';
+        if (block) lastPut.markupAfter = tidy(block.innerHTML).slice(0, 300);
+      } catch { /* the page has moved on, and so has the question */ }
+    }, 500);
   }
 
   function canRaise(doc) {
