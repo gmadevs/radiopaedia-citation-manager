@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.5
+// @version      1.5.6
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -2527,6 +2527,17 @@
       display:block !important; visibility:visible !important; opacity:1 !important;
       color:inherit; flex:0 0 auto;
     }
+    /* The fill is set on the paths as a presentation attribute, and a
+       presentation attribute loses to any stylesheet rule at all — including
+       the toolbar's own icon CSS, which was written for its sprite glyphs and
+       lands on our paths because they are inside its button. On the omega,
+       which is a stroked outline and nothing else, an inherited fill floods
+       the counter and the whole thing goes out as a purple blob; the quote
+       mark is filled anyway, so there it never showed. Say it again in a
+       voice a stylesheet cannot outrank, and say it for both: stroked paths
+       hollow, unstroked paths solid. */
+    .rcx-icon path[stroke] { fill:none !important; }
+    .rcx-icon path:not([stroke]) { fill:currentColor !important; }
     .rcx-btn:hover { color:#3f1f66 !important; }
 
     .rcx-btn.rcx-open {
