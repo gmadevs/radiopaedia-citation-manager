@@ -2,7 +2,7 @@
 
 <img src="docs/logo.svg" alt="" width="128">
 
-# Radiopaedia Cite
+# Radiociter
 
 **A citation picker in the article editor's own toolbar, right beside `H3`.**
 
@@ -23,7 +23,7 @@ And beside it, a **`Ω`** for the characters that are not on the keyboard: `≤`
 [![Userscript](https://img.shields.io/badge/userscript-Tampermonkey-00485B?logo=tampermonkey&logoColor=white)](https://www.tampermonkey.net/)
 [![No build step](https://img.shields.io/badge/dependencies-none-lightgrey)](radiopaedia-cite.user.js)
 [![One file](https://img.shields.io/github/size/gmadevs/radiopaedia-citation-manager/radiopaedia-cite.user.js?label=one%20file&color=lightgrey)](radiopaedia-cite.user.js)
-[![Tests](https://img.shields.io/badge/tests-111%20checks-2ea44f)](tools/test)
+[![Tests](https://img.shields.io/badge/tests-144%20checks-2ea44f)](tools/test)
 [![Last commit](https://img.shields.io/github/last-commit/gmadevs/radiopaedia-citation-manager?color=blue)](https://github.com/gmadevs/radiopaedia-citation-manager/commits/main)
 
 </div>
@@ -324,13 +324,14 @@ in strokes that owe the stylesheet nothing.
 **No button.** Open the console: the script prints one line on every edit page it runs on.
 
 ```
-[Radiopaedia Cite] v1.5.5 active · /articles/…/edit · editor page: true · editable fields: 1
+[Radiopaedia Cite] v1.5.6 active · /articles/…/edit · editor page: true · editable fields: 1
                   · buttons: beside H3 · references: 11
 ```
 
 The version is on that line because a fix nobody is running looks exactly like a fix that does not
 work — userscript managers check for updates on their own schedule, and the file on your disk is not
-the file in your browser.
+the file in your browser. The tag still reads `Radiopaedia Cite`: that is the name the script prints,
+and it is quoted here as it comes out rather than as it ought to look.
 
 No line at all means the script is not running — check it is enabled and that the page is under
 `radiopaedia.org`. `editable fields: 0` means it is running and cannot see the editor at all.
