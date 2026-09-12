@@ -32,6 +32,29 @@ is('"e.g." is not the end of a sentence',
           (p) => setCaret(p.firstChild, 'Other lesions (e.g.'.length)),
    'Other lesions (e.g. <sup>2</sup> ependymoma) enhance.');
 
+// A colon that ends the line is introducing the list underneath, and the
+// source is the list's: the marker stays on the right of it.
+is('a colon at the end of the line is not hopped',
+   citeAt('Several patterns are described:', endOf((p) => p.firstChild)),
+   'Several patterns are described: <sup>2</sup>');
+
+is('a colon with a list under it is not hopped',
+   (() => {
+     body.innerHTML = '<p id="t">Several patterns are described:</p><ul><li>solid</li></ul>';
+     const p = doc.getElementById('t');
+     setCaret(p.firstChild, p.firstChild.data.length);
+     click(btn());
+     type('ependymoma');
+     key($('.rcx-q'), 'Enter');
+     return doc.getElementById('t').innerHTML;
+   })(),
+   'Several patterns are described: <sup>2</sup>');
+
+is('a colon mid-sentence is hopped',
+   citeAt('Two patterns: solid and cystic.',
+          (p) => setCaret(p.firstChild, 'Two patterns:'.length)),
+   'Two patterns <sup>2</sup>: solid and cystic.');
+
 is('a full stop before a capital is',
    citeAt('It enhances. Then it fades.',
           (p) => setCaret(p.firstChild, 'It enhances.'.length)),

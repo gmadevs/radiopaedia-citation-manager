@@ -137,9 +137,12 @@ Both of those are easy to get wrong by hand, so neither is left to the hand:
 - **The space** is added when the character before the caret is not one already — and not added at
   the start of a paragraph, or when there is a space there.
 - **The full stop** is hopped: a caret parked immediately after the end of a sentence goes back
-  inside it, where the marker belongs. Commas, semicolons and colons likewise. A full stop that is
+  inside it, where the marker belongs. Commas and semicolons likewise. A full stop that is
   *not* the end of anything — `e.g.`, `i.e.`, `Fig.` — is left alone, because what follows it is a
   small letter.
+- **The colon** goes both ways. Mid-sentence — `Two patterns: solid and cystic` — it is hopped like
+  a comma. At the end of the line it is introducing the list underneath, and the source is the
+  list's, so the marker stays on the right of it: `several patterns are described: <sup>1</sup>`.
 
 And when the caret is already beside a marker, the number **joins** it rather than standing a second
 `<sup>` next to the first:

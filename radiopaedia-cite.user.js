@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @updateURL    https://raw.githubusercontent.com/gmadevs/radiopaedia-citation-manager/main/radiopaedia-cite.user.js
 // @license      MIT
-// @version      1.5.6
+// @version      1.5.7
 // @description  A citation picker in the article editor's own toolbar, beside H3, and a characters grid next to it. Press it and type: the references this article already has, filtered as you write, and one press puts the number in the text where the caret was — merged into the marker beside it when there is one, 2,3 and 2-4 the way Radiopaedia writes them. Paste an identifier it has not got yet - a DOI, a PMID, a PMCID, a PII, an ISBN, a Google Books id, or a URL to the paper - and it is looked up on radiopaedia.work/cite, added as the next numbered reference, and cited in the same press.
 // @match        https://radiopaedia.org/*
 // @connect      radiopaedia.work
@@ -1299,12 +1299,19 @@
   /* Back over the punctuation, so the marker lands inside the sentence.
    *
    * `metastases.|` becomes `metastases <sup>1</sup>.`, which is how every
-   * reference on the site is written. A comma, a semicolon and a colon are
-   * hopped without asking — a marker belongs before them for the same reason.
+   * reference on the site is written. A comma and a semicolon are hopped
+   * without asking — a marker belongs before them for the same reason.
    * A full stop is only hopped when it ENDS something: the end of the block,
    * or whitespace and then a capital. That test is the whole reason "e.g." and
    * "i.e." and "Fig." survive: what follows them is a small letter, so the
-   * caret stays where you put it. */
+   * caret stays where you put it.
+   *
+   * A colon is the other way round. Mid-sentence — `Findings: a mass` — it is
+   * punctuation like any other and the marker goes in front of it. At the end
+   * of the line it is not punctuation the sentence closed on, it is a colon
+   * introducing the list underneath, and the source belongs to the whole list:
+   * `the following types: <sup>1</sup>`, with the marker AFTER the colon,
+   * which is where the caret already is. So nothing is hopped there. */
   const SENTENCE_END = /^\s+["'“‘(]?[A-Z0-9]|^\s*$/;
 
   function hopPunctuation(range) {
@@ -1313,10 +1320,10 @@
     const at = range.startOffset;
     const mark = node.data[at - 1];
     if (!'.,;:'.includes(mark)) return null;
-    if (mark === '.') {
+    if (mark === '.' || mark === ':') {
       const after = node.data.slice(at);
       const tail = after.trim() === '' ? restOfBlockAfter(node, range) : after;
-      if (!SENTENCE_END.test(tail)) return null;
+      if (mark === ':' ? tail.trim() === '' : !SENTENCE_END.test(tail)) return null;
     }
     const hop = node.ownerDocument.createRange();
     hop.setStart(node, at - 1);
