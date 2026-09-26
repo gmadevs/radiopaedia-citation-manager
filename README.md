@@ -197,6 +197,13 @@ One more return and three things happen:
 3. the line goes to the **clipboard** as well, so a lookup is never lost even if the box could not
    be made.
 
+**On a case's edit page** the reference is usually not added for you. The lookup, the preview and
+the number work the same way, but when the script cannot make a new reference box on the case form,
+the citation is left on the clipboard and the panel says so. Add
+the reference with the page's own controls, paste it in, and then cite it: the marker is not
+inserted until the reference is there. When the box *can* be made, it is filled in and cited
+exactly as on an article.
+
 `N` is the next free number: the number of boxes, or the highest number written in them, whichever
 is larger. Handing out a number that is already taken is the one failure that quietly sends a marker
 to the wrong paper, so it errs upward.
